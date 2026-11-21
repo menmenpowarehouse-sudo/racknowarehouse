@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MBS Put-Away / Susun Barang</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <a class="home-link" href="index.html" data-i18n="home">Utama</a>
+      <span class="topbar-title" data-i18n="putawayTitle"></span>
+    </div>
+    <div class="topbar-right">
+      <button type="button" class="user-chip" onclick="MBS_API.openPendingRestockExportDialog()">⬇ Restock</button>
+      <button type="button" id="staff-chip" class="user-chip" onclick="openStaffDialog()"></button>
+      <button type="button" id="lang-toggle-btn" class="lang-btn" onclick="toggleLang()">BM / EN</button>
+    </div>
+  </header>
+  <div id="mode-banner" class="demo-banner"></div>
+
+  <main class="container">
+    <div class="tabs" id="putaway-tabs">
+      <div role="tablist" class="tablist" focusgroup="tablist nomemory" aria-label="Put-Away Views">
+        <button type="button" role="tab" id="tab-susun" aria-selected="true" focusgroupstart data-i18n="tabPutaway"></button>
+        <button type="button" role="tab" id="tab-viewrack" aria-selected="false" data-i18n="tabRackView"></button>
+      </div>
+
+      <!-- TAB 1: PUT-AWAY -->
+      <div role="tabpanel" aria-labelledby="tab-susun">
+        <div class="panel-inner">
+
+          <!-- 5-minute rack reminder banner (hidden until timer fires) -->
+          <div id="rack-reminder-bar" class="reminder-bar" hidden>
+            <div>
+              <strong id="rack-reminder-msg"></strong>
+            </div>
+            <div class="flex-row">
+              <button type="button" class="btn btn-sm btn-outline" onclick="keepCurrentRack()" data-i18n="keepRack"></button>
+              <button type="button" class="btn btn-sm btn-warning" onclick="openRackModal()" data-i18n="changeRackBtn"></button>
+            </div>
+          </div>
+
+          <!-- Step 1: Current Rack Hero (NEVER persisted across refresh!) -->
+          <section id="rack-hero" class="rack-hero empty">
+            <div class="flex-between">
+              <span style="font-size:0.82rem;opacity:0.9;font-weight:700;" data-i18n="currentRack"></span>
+              <span id="rack-timer-badge" class="badge badge-gray" style="background:rgb(255 255 255 / 0.2);color:#fff;"></span>
+            </div>
+            <div id="current-rack-display" class="rack-code-display"></div>
+            <button type="button" class="btn btn-lg btn-block" style="background:#fff;color:#0f172a;" onclick="openRackModal()">
+              <span>📍</span> <span data-i18n="changeRackBtn"></span>
+            </button>
+          </section>
+
+          <!-- Error banner when trying to scan item with empty rack -->
+          <div id="rack-error-box" class="alert alert-error" hidden></div>
+
+          <!-- Step 2: Scan or Enter Item Barcode -->
+          <section class="card">
+            <h2 class="card-title">
+              <span>2. <span data-i18n="barcode"></span></span>
+            </h2>
+            <div class="grid-2" style="margin-bottom:10px;">
+              <button type="button" class="btn btn-lg btn-primary" onclick="scanItemBarcode()">
+                <span>📷</span> <span data-i18n="scanItemBtn"></span>
+              </button>
+            </div>
+            <div class="input-row">
+              <input type="text" id="item-barcode-input" autocomplete="off" placeholder="4902505163104 / 9555078900011">
+              <button type="button" class="btn btn-outline" onclick="lookupTypedBarcode()" data-i18n="lookupBtn"></button>
+            </div>
+            <p class="hint" style="margin-top:6px;">
+              Demo Sheet Barcodes: <code>9555078900011</code>, <code>6971234560099</code> | Firebase: <code>4902505163104</code>, <code>9556089001234</code>
+            </p>
+          </section>
+
+          <!-- Step 3: Unified Inline Item Editor Card (NO forced photo/qty popups!) -->
+          <section id="editor-card" class="card" hidden>
+            <div class="flex-between" style="margin-bottom:10px;">
+              <span id="editor-mode-badge" class="badge badge-blue"></span>
+              <span id="editor-source-badge" class="badge badge-gray"></span>
+            </div>
+
+            <div class="flex-row" style="align-items:flex-start;margin-bottom:12px;">
+              <!-- Optional photo box: click Edit to take photo anytime, zero popup nag -->
+              <div class="photo-box" id="editor-photo-box">
+                <div class="photo-placeholder" id="editor-photo-placeholder" data-i18n="noPhoto"></div>
+                <img id="editor-photo-img" alt="Product" hidden>
+                <button type="button" class="photo-edit-btn" onclick="triggerPhotoCapture()">📷 <span data-i18n="editPhoto"></span></button>
+                <input type="file" id="photo-file-input" accept="image/*" capture="environment" hidden onchange="handlePhotoSelected(event)">
+              </div>
+
+              <div style="flex:1;min-width:190px;">
+                <div class="field">
+                  <label for="ed-barcode" data-i18n="barcode"></label>
+                  <input type="text" id="ed-barcode" required>
+                </div>
+                <div class="field" style="margin-bottom:0;">
+                  <label for="ed-brand" data-i18n="brand"></label>
+                  <input type="text" id="ed-brand" placeholder="PILOT / DBP / CHINA-STAT">
+                </div>
+              </div>
+            </div>
+
+            <div id="photo-upload-status" class="alert alert-info" hidden></div>
+
+            <div class="field">
+              <label for="ed-name" data-i18n="itemName"></label>
+              <input type="text" id="ed-name" required>
+            </div>
+
+            <div class="field">
+              <label for="ed-qty" data-i18n="stockQty"></label>
+              <input type="number" id="ed-qty" min="0" step="1" placeholder="Optional (shared across all racks)">
+            </div>
+
+            <!-- Existing Rack Display + 3-Way Conflict Resolution -->
+            <div id="picknow-preserve-info" class="alert alert-success" hidden></div>
+            <div id="old-rack-info" class="alert alert-info" hidden></div>
+
+            <div id="rack-conflict-box" class="conflict-box" hidden>
+              <strong data-i18n="rackConflictTitle" style="font-size:0.9rem;color:#92400e;"></strong>
+              <div class="conflict-choice">
+                <button type="button" class="btn conflict-btn selected" id="btn-conflict-split" onclick="selectConflictMode('split')">
+                  1. <span data-i18n="optSplit"></span>
+                </button>
+                <button type="button" class="btn conflict-btn" id="btn-conflict-old" onclick="selectConflictMode('old')">
+                  2. <span data-i18n="optMoveOld"></span>
+                </button>
+                <button type="button" class="btn conflict-btn" id="btn-conflict-new" onclick="selectConflictMode('new')">
+                  3. <span data-i18n="optReplaceNew"></span>
+                </button>
+              </div>
+            </div>
+
+            <div class="field" style="background:var(--purple-soft);border:1.5px solid #c4b5fd;border-radius:10px;padding:10px 12px;">
+              <label style="display:flex;align-items:center;gap:10px;margin:0;cursor:pointer;color:var(--purple);font-size:0.88rem;">
+                <input type="checkbox" id="ed-picknow-check" style="width:22px;height:22px;min-height:auto;flex-shrink:0;" onchange="updateRacksPreview()">
+                <span data-i18n="pickNowToggleLabel"></span>
+              </label>
+            </div>
+
+            <!-- Auto-Restore banner when stocking an item previously flagged NO_STOCK -->
+            <div id="restore-active-box" class="field" hidden style="background:var(--green-soft);border:2px solid var(--green);border-radius:10px;padding:10px 12px;">
+              <label style="display:flex;align-items:center;gap:10px;margin:0;cursor:pointer;color:var(--green);font-size:0.9rem;font-weight:800;">
+                <input type="checkbox" id="ed-restore-active-check" checked style="width:22px;height:22px;min-height:auto;flex-shrink:0;">
+                <span data-i18n="restoreActiveLabel"></span>
+              </label>
+            </div>
+
+            <div class="field">
+              <label for="ed-racks-preview" data-i18n="rackCode"></label>
+              <input type="text" id="ed-racks-preview" readonly style="background:var(--surface-2);font-weight:800;">
+            </div>
+
+            <div class="grid-2">
+              <button type="button" class="btn btn-lg btn-success" id="btn-save-item" onclick="saveCurrentItem()">
+                ✓ <span data-i18n="save"></span>
+              </button>
+              <button type="button" class="btn btn-lg btn-outline" onclick="clearEditor()">
+                <span data-i18n="cancel"></span>
+              </button>
+            </div>
+          </section>
+
+        </div>
+      </div>
+
+      <!-- TAB 2: VIEW-ONLY RACK INSPECTOR -->
+      <div role="tabpanel" aria-labelledby="tab-viewrack" hidden="until-found">
+        <div class="panel-inner">
+          <section class="card">
+            <p data-i18n="viewRackPrompt" style="margin:0 0 10px;font-size:0.88rem;color:var(--muted);"></p>
+            <div class="input-row" style="margin-bottom:10px;">
+              <input type="text" id="view-rack-input" placeholder="e.g. LS-01-02 / TB-01-01 / CS-03-12">
+              <button type="button" class="btn btn-primary" onclick="loadRackView()" data-i18n="search"></button>
+              <button type="button" class="btn btn-outline" onclick="scanForRackView()">📷</button>
+            </div>
+            <div id="view-rack-results"></div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- DIALOG: Set / Change Rack Code -->
+  <dialog id="rack-dialog" closedby="any" aria-labelledby="rack-dlg-title">
+    <div class="dialog-header">
+      <h2 id="rack-dlg-title" data-i18n="changeRackBtn"></h2>
+      <button type="button" class="btn btn-sm btn-outline" onclick="document.getElementById('rack-dialog').close()" data-i18n="close"></button>
+    </div>
+    <div class="dialog-body">
+      <button type="button" class="btn btn-lg btn-primary btn-block" style="margin-bottom:10px;" onclick="scanRackCodeFromModal()">
+        📷 <span data-i18n="scan"></span> QR / Code128 (3x)
+      </button>
+
+      <button type="button" class="btn btn-lg btn-purple btn-block" style="margin-bottom:14px;" onclick="setPickNowRackFromModal()">
+        ⚡ <span data-i18n="pickNowSetBtn"></span>
+      </button>
+
+      <div class="field">
+        <label for="rack-manual-input" data-i18n="rackCode"></label>
+        <div class="input-row">
+          <input type="text" id="rack-manual-input" placeholder="e.g. CS-03-12 or PICKNOW" autocomplete="off">
+          <button type="button" class="btn btn-success" onclick="applyManualRack()" data-i18n="save"></button>
+        </div>
+      </div>
+
+      <div class="field" style="margin-bottom:0;">
+        <label data-i18n="rackHistory"></label>
+        <div id="rack-history-chips" class="flex-row"></div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- DIALOG: Staff Identity -->
+  <dialog id="staff-dialog" aria-labelledby="staff-dlg-title">
+    <div class="dialog-header">
+      <h2 id="staff-dlg-title" data-i18n="staff"></h2>
+      <button type="button" class="btn btn-sm btn-outline" onclick="document.getElementById('staff-dialog').close()" data-i18n="close"></button>
+    </div>
+    <div class="dialog-body">
+      <div class="field">
+        <label for="putaway-staff-input" data-i18n="staff"></label>
+        <input type="text" id="putaway-staff-input" placeholder="Ali (Putaway)">
+      </div>
+      <button type="button" class="btn btn-primary btn-block" onclick="savePutawayStaff()" data-i18n="save"></button>
+    </div>
+  </dialog>
+
+  <script src="js/branch.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/scanner.js"></script>
+  <script src="js/api.js"></script>
+  <script>
+    // STRICT RULE: Current Rack Code is NEVER persisted across refresh!
+    let currentRackCode = "";
+    let rackSetTimestamp = 0;
+    let rackReminderInterval = null;
+
+    // Recent rack history list (only as quick-select helper, never auto-loaded as currentRackCode)
+    const RACK_HIST_KEY = "mbs_putaway_rack_history";
+    let staffName = localStorage.getItem("mbs_putaway_staff") || "Ali (Putaway)";
+
+    // Currently edited item state
+    let editingOldRacks = [];
+    let editingPhotoUrl = "";
+    let editingStatus = "ACTIVE";
+    let conflictMode = "split"; // "split" | "old" | "new"
+
+    function getRackHistory() {
+      try { return JSON.parse(localStorage.getItem(RACK_HIST_KEY) || "[]"); } catch (_) { return []; }
+    }
+    function pushRackHistory(code) {
+      const clean = code.toUpperCase();
+      let list = getRackHistory().filter((r) => r !== clean);
+      list.unshift(clean);
+      if (list.length > 15) list = list.slice(0, 15);
+      localStorage.setItem(RACK_HIST_KEY, JSON.stringify(list));
+    }
+
+    function renderRackHero() {
+      const hero = document.getElementById("rack-hero");
+      const disp = document.getElementById("current-rack-display");
+      const errBox = document.getElementById("rack-error-box");
+      if (!currentRackCode) {
+        hero.classList.add("empty");
+        hero.style.background = "";
+        disp.textContent = t("noRackSet");
+      } else if (currentRackCode === "PICKNOW") {
+        hero.classList.remove("empty");
+        hero.style.background = "linear-gradient(135deg, #5b21b6, #7c3aed)";
+        disp.textContent = "⚡ PICKNOW";
+        errBox.hidden = true;
+      } else {
+        hero.classList.remove("empty");
+        hero.style.background = "";
+        disp.textContent = currentRackCode;
+        errBox.hidden = true;
+      }
+      document.getElementById("staff-chip").textContent = "👤 " + staffName;
+      updateRacksPreview();
+    }
+
+    function setActiveRack(code) {
+      const clean = MBS_API.normalizeRack(code);
+      if (!clean) return;
+      currentRackCode = clean;
+      rackSetTimestamp = Date.now();
+      pushRackHistory(clean);
+      document.getElementById("rack-reminder-bar").hidden = true;
+      renderRackHero();
+      refreshConflictUI();
+      startRackTimer();
+      showToast(`${t("currentRack")}: ${clean}`);
+    }
+
+    function setPickNowRackFromModal() {
+      setActiveRack("PICKNOW");
+      document.getElementById("rack-dialog").close();
+    }
+
+    function startRackTimer() {
+      clearInterval(rackReminderInterval);
+      const mins = (window.MBS_CONFIG && window.MBS_CONFIG.RACK_REMINDER_MINUTES) || 5;
+      const limitMs = mins * 60 * 1000;
+      rackReminderInterval = setInterval(() => {
+        if (!currentRackCode) return;
+        const elapsed = Date.now() - rackSetTimestamp;
+        const leftSec = Math.max(0, Math.ceil((limitMs - elapsed) / 1000));
+        const mm = String(Math.floor(leftSec / 60)).padStart(2, "0");
+        const ss = String(leftSec % 60).padStart(2, "0");
+        document.getElementById("rack-timer-badge").textContent = `⏱ ${mm}:${ss}`;
+
+        if (elapsed >= limitMs) {
+          document.getElementById("rack-reminder-msg").textContent = `${t("rackReminderText")} [${currentRackCode}]?`;
+          document.getElementById("rack-reminder-bar").hidden = false;
+        }
+      }, 1000);
+    }
+
+    function keepCurrentRack() {
+      rackSetTimestamp = Date.now();
+      document.getElementById("rack-reminder-bar").hidden = true;
+    }
+
+    function openRackModal() {
+      const dlg = document.getElementById("rack-dialog");
+      document.getElementById("rack-manual-input").value = "";
+      const chips = document.getElementById("rack-history-chips");
+      chips.replaceChildren();
+      const hist = getRackHistory();
+      if (!hist.length) {
+        const s = document.createElement("span");
+        s.style.cssText = "color:var(--muted);font-size:0.84rem;";
+        s.textContent = "TB-01-01, LS-01-02, CS-03-12...";
+        chips.appendChild(s);
+      } else {
+        hist.forEach((rk) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "btn btn-sm btn-soft-blue";
+          b.textContent = rk;
+          b.onclick = () => { setActiveRack(rk); dlg.close(); };
+          chips.appendChild(b);
+        });
+      }
+      dlg.showModal();
+    }
+
+    async function scanRackCodeFromModal() {
+      const dlg = document.getElementById("rack-dialog");
+      dlg.close();
+      const code = await openTripleScanner({ title: t("changeRackBtn") });
+      if (code) setActiveRack(code);
+    }
+
+    function applyManualRack() {
+      const val = document.getElementById("rack-manual-input").value.trim();
+      if (!val) return;
+      setActiveRack(val);
+      document.getElementById("rack-dialog").close();
+    }
+
+    function guardRackPresent() {
+      if (!currentRackCode) {
+        const errBox = document.getElementById("rack-error-box");
+        errBox.textContent = t("rackRequiredErr");
+        errBox.hidden = false;
+        showToast(t("rackRequiredErr"));
+        return false;
+      }
+      return true;
+    }
+
+    async function scanItemBarcode() {
+      if (!guardRackPresent()) return;
+      const code = await openTripleScanner({ title: t("scanItemBtn") });
+      if (code) {
+        document.getElementById("item-barcode-input").value = code;
+        await performItemLookup(code);
+      }
+    }
+
+    async function lookupTypedBarcode() {
+      if (!guardRackPresent()) return;
+      const code = document.getElementById("item-barcode-input").value.trim();
+      if (!code) return;
+      await performItemLookup(code);
+    }
+
+    async function performItemLookup(barcode) {
+      showToast(t("loading"));
+      const res = await MBS_API.lookupItem(barcode);
+      const card = document.getElementById("editor-card");
+      card.hidden = false;
+
+      const modeBadge = document.getElementById("editor-mode-badge");
+      const srcBadge = document.getElementById("editor-source-badge");
+
+      if (!res.found) {
+        // New item — blank editable form, NO forced photo or stock qty popups!
+        modeBadge.className = "badge badge-amber";
+        modeBadge.textContent = t("newItemTag");
+        srcBadge.textContent = "NEW";
+        document.getElementById("ed-barcode").value = barcode;
+        document.getElementById("ed-name").value = "";
+        document.getElementById("ed-brand").value = "";
+        document.getElementById("ed-qty").value = "";
+        editingOldRacks = [];
+        editingPhotoUrl = "";
+        editingStatus = "ACTIVE";
+        document.getElementById("ed-picknow-check").checked = currentRackCode === "PICKNOW";
+        document.getElementById("restore-active-box").hidden = true;
+      } else {
+        const it = res.item;
+        modeBadge.className = "badge badge-green";
+        modeBadge.textContent = t("existingItemTag");
+        srcBadge.textContent = res.source === "firebase" ? "Firebase" : "Google Sheet Master";
+        document.getElementById("ed-barcode").value = it.barcode;
+        document.getElementById("ed-name").value = it.item_name || "";
+        document.getElementById("ed-brand").value = it.brand || "";
+        document.getElementById("ed-qty").value = it.stock_quantity === null || it.stock_quantity === undefined ? "" : it.stock_quantity;
+        // Keep only permanent racks in editingOldRacks so PICKNOW never causes fake conflicts!
+        editingOldRacks = (Array.isArray(it.rack_codes) ? it.rack_codes : [])
+          .map((r) => MBS_API.normalizeRack(r))
+          .filter((r) => r && r !== "PICKNOW");
+        editingPhotoUrl = it.photo_url || "";
+        editingStatus = it.item_status || "ACTIVE";
+        document.getElementById("ed-picknow-check").checked = currentRackCode === "PICKNOW" || MBS_API.isPickNow(it);
+
+        // If item was previously NO_STOCK, show auto-checked restore toggle so restocking reactivates it!
+        const wasNoStock = editingStatus === "NO_STOCK";
+        document.getElementById("restore-active-box").hidden = !wasNoStock;
+        document.getElementById("ed-restore-active-check").checked = true;
+      }
+
+      renderEditorPhoto();
+      conflictMode = "split";
+      refreshConflictUI();
+      card.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
+    function renderEditorPhoto() {
+      const img = document.getElementById("editor-photo-img");
+      const ph = document.getElementById("editor-photo-placeholder");
+      if (editingPhotoUrl) {
+        img.src = editingPhotoUrl;
+        img.hidden = false;
+        ph.hidden = true;
+      } else {
+        img.hidden = true;
+        img.removeAttribute("src");
+        ph.hidden = false;
+      }
+    }
+
+    function refreshConflictUI() {
+      const oldInfo = document.getElementById("old-rack-info");
+      const preserveInfo = document.getElementById("picknow-preserve-info");
+      const conflictBox = document.getElementById("rack-conflict-box");
+
+      if (editingOldRacks.length > 0) {
+        oldInfo.hidden = false;
+        oldInfo.textContent = `${t("oldRackLabel")}: ${editingOldRacks.join(", ")}`;
+      } else {
+        oldInfo.hidden = true;
+      }
+
+      // If currentRackCode is PICKNOW, DO NOT affect permanent racks & show no destructive conflict!
+      if (currentRackCode === "PICKNOW") {
+        document.getElementById("ed-picknow-check").checked = true;
+        preserveInfo.hidden = false;
+        preserveInfo.textContent = editingOldRacks.length
+          ? `${t("pickNowPreserved")} (${editingOldRacks.join(", ")})`
+          : t("pickNowPreserved");
+        conflictBox.hidden = true;
+        updateRacksPreview();
+        return;
+      }
+
+      preserveInfo.hidden = true;
+      const differs = editingOldRacks.length > 0 && !editingOldRacks.includes(currentRackCode);
+      conflictBox.hidden = !differs;
+      selectConflictMode(conflictMode);
+    }
+
+    function selectConflictMode(mode) {
+      conflictMode = mode;
+      ["split", "old", "new"].forEach((m) => {
+        const btn = document.getElementById("btn-conflict-" + m);
+        if (btn) btn.classList.toggle("selected", m === mode);
+      });
+      updateRacksPreview();
+    }
+
+    function computeFinalRacks() {
+      const wantsPickNow = document.getElementById("ed-picknow-check")?.checked;
+      let permanent = [];
+
+      if (!currentRackCode || currentRackCode === "PICKNOW") {
+        // PICKNOW never alters permanent racks!
+        permanent = [...editingOldRacks];
+      } else if (editingOldRacks.length === 0) {
+        permanent = [currentRackCode];
+      } else if (editingOldRacks.includes(currentRackCode)) {
+        permanent = [...editingOldRacks];
+      } else if (conflictMode === "split") {
+        permanent = [...new Set([...editingOldRacks, currentRackCode])];
+      } else if (conflictMode === "old") {
+        permanent = [...editingOldRacks];
+      } else if (conflictMode === "new") {
+        permanent = [currentRackCode];
+      }
+
+      if (wantsPickNow || currentRackCode === "PICKNOW") {
+        return [...new Set([...permanent, "PICKNOW"])];
+      }
+      return permanent;
+    }
+
+    function updateRacksPreview() {
+      const el = document.getElementById("ed-racks-preview");
+      if (el) el.value = computeFinalRacks().join(", ");
+    }
+
+    function triggerPhotoCapture() {
+      document.getElementById("photo-file-input").click();
+    }
+
+    async function handlePhotoSelected(evt) {
+      const file = evt.target.files && evt.target.files[0];
+      if (!file) return;
+      const code = document.getElementById("ed-barcode").value.trim();
+      if (!code) return;
+      const status = document.getElementById("photo-upload-status");
+      try {
+        const res = await MBS_API.uploadPhoto(code, file);
+        if (!res) return; // cancelled crop
+        status.hidden = true;
+        editingPhotoUrl = res.url;
+        renderEditorPhoto();
+        showToast(`📷 1:1 Square (${res.size}×${res.size}, ${res.kb} KB)`);
+      } catch (err) {
+        status.hidden = false;
+        status.textContent = "Upload error: " + err.message;
+      } finally {
+        evt.target.value = "";
+      }
+    }
+
+    async function saveCurrentItem() {
+      if (!guardRackPresent()) return;
+      const barcode = document.getElementById("ed-barcode").value.trim();
+      const item_name = document.getElementById("ed-name").value.trim();
+      const brand = document.getElementById("ed-brand").value.trim();
+      const stock_quantity = document.getElementById("ed-qty").value.trim();
+      if (!barcode) return showToast("Barcode required!");
+
+      const finalRacks = computeFinalRacks();
+      const wantsPickNow = document.getElementById("ed-picknow-check").checked || currentRackCode === "PICKNOW";
+      const finalStatus = (editingStatus === "NO_STOCK" && document.getElementById("ed-restore-active-check").checked)
+        ? "ACTIVE"
+        : editingStatus;
+      const switchedToOld = currentRackCode !== "PICKNOW" && editingOldRacks.length > 0 && !editingOldRacks.includes(currentRackCode) && conflictMode === "old";
+
+      const btn = document.getElementById("btn-save-item");
+      btn.disabled = true;
+      try {
+        await MBS_API.saveItem({
+          barcode,
+          item_name: item_name || barcode,
+          brand,
+          photo_url: editingPhotoUrl,
+          rack_codes: finalRacks,
+          stock_quantity,
+          item_status: finalStatus,
+          pick_now: wantsPickNow
+        }, staffName);
+
+        if (switchedToOld && editingOldRacks[0]) {
+          // User chose "排去旧架": switch current rack code to the old rack
+          setActiveRack(editingOldRacks[0]);
+        }
+        showToast(t("savedSuccess"));
+        clearEditor();
+      } catch (err) {
+        showToast("Error: " + err.message);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function clearEditor() {
+      document.getElementById("editor-card").hidden = true;
+      document.getElementById("item-barcode-input").value = "";
+      document.getElementById("item-barcode-input").focus();
+    }
+
+    // ---- TAB 2: VIEW-ONLY RACK INSPECTOR ----
+    async function scanForRackView() {
+      const code = await openTripleScanner({ title: t("tabRackView") });
+      if (code) {
+        document.getElementById("view-rack-input").value = code;
+        await loadRackView();
+      }
+    }
+
+    async function loadRackView() {
+      const rk = document.getElementById("view-rack-input").value.trim().toUpperCase();
+      const box = document.getElementById("view-rack-results");
+      box.replaceChildren();
+      if (!rk) return;
+
+      const items = await MBS_API.listItemsByRack(rk);
+      if (!items.length) {
+        const p = document.createElement("p");
+        p.style.color = "var(--muted)";
+        p.textContent = `${rk}: ${t("noData")}`;
+        box.appendChild(p);
+        return;
+      }
+
+      items.forEach((it) => {
+        const card = document.createElement("div");
+        card.className = "item-card";
+
+        const thumb = document.createElement("div");
+        thumb.className = "item-thumb";
+        if (it.photo_url) {
+          const im = document.createElement("img");
+          im.src = it.photo_url;
+          im.alt = it.item_name || it.barcode;
+          thumb.appendChild(im);
+        } else {
+          thumb.textContent = t("noPhoto");
+        }
+
+        const meta = document.createElement("div");
+        meta.className = "item-meta";
+        const nm = document.createElement("div");
+        nm.className = "item-name";
+        nm.textContent = it.item_name || it.barcode;
+
+        const sub = document.createElement("div");
+        sub.className = "item-sub";
+        sub.textContent = `${it.barcode} • ${it.brand || "-"}`;
+
+        const badges = document.createElement("div");
+        badges.className = "flex-row";
+        const bRack = document.createElement("span");
+        bRack.className = "badge badge-blue";
+        bRack.textContent = (it.rack_codes || []).join(", ");
+
+        const bQty = document.createElement("span");
+        bQty.className = "badge badge-gray";
+        bQty.textContent = `Qty: ${it.stock_quantity ?? "-"}`;
+
+        const bSt = document.createElement("span");
+        bSt.className = it.item_status === "NO_STOCK" ? "badge badge-red" : "badge badge-green";
+        bSt.textContent = it.item_status || "ACTIVE";
+
+        badges.append(bRack, bQty, bSt);
+        meta.append(nm, sub, badges);
+        card.append(thumb, meta);
+        box.appendChild(card);
+      });
+    }
+
+    function openStaffDialog() {
+      document.getElementById("putaway-staff-input").value = staffName;
+      document.getElementById("staff-dialog").showModal();
+    }
+    function savePutawayStaff() {
+      const val = document.getElementById("putaway-staff-input").value.trim();
+      if (val) {
+        staffName = val;
+        localStorage.setItem("mbs_putaway_staff", staffName);
+        renderRackHero();
+      }
+      document.getElementById("staff-dialog").close();
+    }
+
+    document.getElementById("item-barcode-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); lookupTypedBarcode(); }
+    });
+    document.getElementById("view-rack-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); loadRackView(); }
+    });
+    document.addEventListener("mbs:langchange", () => { renderRackHero(); refreshConflictUI(); });
+
+    document.addEventListener("DOMContentLoaded", async () => {
+      await MBS_API.init();
+      renderRackHero();
+    });
+  </script>
+</body>
+</html>

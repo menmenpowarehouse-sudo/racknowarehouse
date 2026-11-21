@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MBS Warehouse Picking / Ambil Barang</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <a class="home-link" href="index.html" data-i18n="home">Utama</a>
+      <span class="topbar-title" data-i18n="pickTitle"></span>
+    </div>
+    <div class="topbar-right">
+      <button type="button" class="user-chip" onclick="MBS_API.openPendingRestockExportDialog()">⬇ Restock</button>
+      <button type="button" id="picker-chip" class="user-chip" hidden onclick="logoutPicker()"></button>
+      <button type="button" id="lang-toggle-btn" class="lang-btn" onclick="toggleLang()">BM / EN</button>
+    </div>
+  </header>
+  <div id="mode-banner" class="demo-banner"></div>
+
+  <main class="container">
+    <!-- PICKER IDENTITY LOGIN -->
+    <section id="picker-login" class="card" style="max-width:420px;margin:24px auto;">
+      <h1 class="card-title" data-i18n="login"></h1>
+      <form onsubmit="loginPicker(event)">
+        <div class="field">
+          <label for="picker-name-select" data-i18n="staff"></label>
+          <select id="picker-name-select" required></select>
+        </div>
+        <div class="field">
+          <label for="picker-pw" data-i18n="password"></label>
+          <input type="password" id="picker-pw" required placeholder="Demo pw: 123">
+        </div>
+        <div id="picker-login-err" class="alert alert-error" hidden></div>
+        <button type="submit" class="btn btn-lg btn-primary btn-block" data-i18n="login"></button>
+      </form>
+    </section>
+
+    <!-- PICKER MAIN WORKSPACE -->
+    <section id="picker-app" hidden>
+      <div class="tabs" id="pick-tabs">
+        <div role="tablist" class="tablist" focusgroup="tablist nomemory" aria-label="Picking Views">
+          <button type="button" role="tab" id="tab-picklist" aria-selected="true" focusgroupstart data-i18n="tabPickList"></button>
+          <button type="button" role="tab" id="tab-picklog" aria-selected="false" data-i18n="tabPickLog"></button>
+        </div>
+
+        <!-- TAB 1: PICKING LIST -->
+        <div role="tabpanel" aria-labelledby="tab-picklist">
+          <div class="panel-inner">
+            <div class="alert alert-warn" data-i18n="noStockRuleNote" style="font-size:0.83rem;"></div>
+
+            <!-- Mode Toggle Bar: Item Rack A-Z vs Single Branch + Brand Filter + Export Pending -->
+            <section class="card">
+              <div class="grid-2" style="margin-bottom:10px;">
+                <button type="button" id="btn-mode-item" class="btn btn-primary" onclick="setViewMode('item')" data-i18n="modeByItem"></button>
+                <button type="button" id="btn-mode-branch" class="btn btn-outline" onclick="setViewMode('branch')" data-i18n="modeByBranch"></button>
+              </div>
+              <div class="input-row" style="margin-bottom:8px;">
+                <select id="branch-filter-select" hidden onchange="renderPickList()"></select>
+                <input type="search" id="pick-search" placeholder="Filter rack / barcode / brand..." oninput="renderPickList()">
+                <button type="button" class="btn btn-outline" onclick="loadPickData()">↻</button>
+              </div>
+              <div class="input-row">
+                <select id="pick-brand-filter" onchange="renderPickList()"></select>
+                <button type="button" class="btn btn-sm btn-success" onclick="exportPickerPendingCsv()">
+                  ⬇ <span data-i18n="exportPendingCsv"></span>
+                </button>
+              </div>
+            </section>
+
+            <div id="pick-list-container"></div>
+          </div>
+        </div>
+
+        <!-- TAB 2: LATEST 1,000 PICKING LOGS -->
+        <div role="tabpanel" aria-labelledby="tab-picklog" hidden="until-found">
+          <div class="panel-inner">
+            <section class="card">
+              <div class="input-row" style="margin-bottom:10px;">
+                <input type="search" id="log-search" placeholder="Search picker, barcode, branch..." oninput="renderPickLogs()">
+                <button type="button" class="btn btn-outline" onclick="loadLogsTabOnly()">↻ <span data-i18n="refresh"></span></button>
+              </div>
+              <div tabindex="0" role="region" aria-labelledby="pick-log-caption" class="table-wrapper">
+                <table class="data-table">
+                  <caption id="pick-log-caption">Latest 1,000 Picking Logs</caption>
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Picker</th>
+                      <th>Item / Barcode</th>
+                      <th>Branch</th>
+                      <th>Qty</th>
+                      <th>Rack</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="pick-log-tbody"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/branch.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/api.js"></script>
+  <script>
+    const PICKER_KEY = "mbs_picker_session";
+    let picker = null; // { staff }
+    let accounts = [];
+    let itemsMap = {};
+    let pendingOrders = [];
+    let pickLogs = [];
+    let viewMode = "item"; // "item" (Rack A-Z) | "branch" (Single Branch)
+
+    async function initPickerLogin() {
+      accounts = (await MBS_API.listAccounts()).filter((a) => a.active !== false);
+      const sel = document.getElementById("picker-name-select");
+      sel.replaceChildren();
+      accounts.forEach((a) => {
+        const opt = document.createElement("option");
+        opt.value = `${a.branch}__${a.staff}`;
+        opt.textContent = `${a.staff} (${a.branch})`;
+        sel.appendChild(opt);
+      });
+    }
+
+    function loginPicker(e) {
+      e.preventDefault();
+      const val = document.getElementById("picker-name-select").value;
+      const pw = document.getElementById("picker-pw").value;
+      const match = accounts.find((a) => `${a.branch}__${a.staff}` === val && String(a.password) === String(pw));
+      const err = document.getElementById("picker-login-err");
+      if (!match) {
+        err.textContent = t("wrongLogin");
+        err.hidden = false;
+        return;
+      }
+      err.hidden = true;
+      picker = { staff: match.staff, branch: match.branch };
+      localStorage.setItem(PICKER_KEY, JSON.stringify(picker));
+      enterPicker();
+    }
+
+    function logoutPicker() {
+      if (!confirm(`${t("logout")} (${picker.staff})?`)) return;
+      localStorage.removeItem(PICKER_KEY);
+      picker = null;
+      document.getElementById("picker-app").hidden = true;
+      document.getElementById("picker-chip").hidden = true;
+      document.getElementById("picker-login").hidden = false;
+    }
+
+    async function enterPicker() {
+      document.getElementById("picker-login").hidden = true;
+      document.getElementById("picker-app").hidden = false;
+      const chip = document.getElementById("picker-chip");
+      chip.hidden = false;
+      chip.textContent = `👤 ${picker.staff} ⏻`;
+      await loadPickData();
+    }
+
+    function setViewMode(mode) {
+      viewMode = mode;
+      document.getElementById("btn-mode-item").className = mode === "item" ? "btn btn-primary" : "btn btn-outline";
+      document.getElementById("btn-mode-branch").className = mode === "branch" ? "btn btn-primary" : "btn btn-outline";
+      document.getElementById("branch-filter-select").hidden = mode !== "branch";
+      renderPickList();
+    }
+
+    let logsLoaded = false;
+
+    async function loadPickData(includeLogs = false) {
+      const [allItems, orders] = await Promise.all([
+        MBS_API.listItems(),
+        MBS_API.listOrders({ status: "PENDING" })
+      ]);
+      itemsMap = Object.fromEntries(allItems.map((i) => [i.barcode, i]));
+      pendingOrders = orders;
+
+      if (includeLogs || logsLoaded) {
+        pickLogs = await MBS_API.listPickLogs(1000);
+        logsLoaded = true;
+        renderPickLogs();
+      }
+
+      // Populate branch dropdown from active pending orders
+      const brSel = document.getElementById("branch-filter-select");
+      const prev = brSel.value;
+      const branches = [...new Set(pendingOrders.map((o) => o.branch_name))].sort();
+      brSel.replaceChildren();
+      const def = document.createElement("option");
+      def.value = "";
+      def.textContent = t("allBranches");
+      brSel.appendChild(def);
+      branches.forEach((b) => {
+        const opt = document.createElement("option");
+        opt.value = b;
+        opt.textContent = `${b} (${pendingOrders.filter((o) => o.branch_name === b).length})`;
+        brSel.appendChild(opt);
+      });
+      if (branches.includes(prev)) brSel.value = prev;
+
+      // Populate Brand filter dropdown
+      const brandSel = document.getElementById("pick-brand-filter");
+      const prevBrand = brandSel.value || "ALL";
+      const brands = MBS_API.collectBrands(allItems, pendingOrders);
+      brandSel.replaceChildren();
+      const allB = document.createElement("option");
+      allB.value = "ALL";
+      allB.textContent = t("allBrands");
+      brandSel.appendChild(allB);
+      const noB = document.createElement("option");
+      noB.value = "__NONE__";
+      noB.textContent = t("noBrandTag");
+      brandSel.appendChild(noB);
+      brands.forEach((b) => {
+        const opt = document.createElement("option");
+        opt.value = b;
+        opt.textContent = b;
+        brandSel.appendChild(opt);
+      });
+      if ([...brandSel.options].some((o) => o.value === prevBrand)) brandSel.value = prevBrand;
+
+      renderPickList();
+    }
+
+    async function loadLogsTabOnly() {
+      pickLogs = await MBS_API.listPickLogs(1000);
+      logsLoaded = true;
+      renderPickLogs();
+    }
+
+    function exportPickerPendingCsv() {
+      const selectedBranch = viewMode === "branch" ? document.getElementById("branch-filter-select").value : "";
+      const scopedOrders = selectedBranch
+        ? pendingOrders.filter((o) => o.branch_name === selectedBranch)
+        : pendingOrders;
+      const brandFilter = document.getElementById("pick-brand-filter").value || "ALL";
+      MBS_API.exportPendingOrdersCsv({
+        orders: scopedOrders,
+        itemsMap,
+        brandFilter,
+        scopeLabel: selectedBranch || "PICKER-ALL"
+      });
+    }
+
+    async function editBrandFromPicker(barcode, currentBrand, itemName) {
+      const brands = MBS_API.collectBrands(Object.values(itemsMap), pendingOrders);
+      const res = await MBS_API.openBrandEditor({
+        barcode,
+        currentBrand,
+        itemName,
+        staffName: picker ? picker.staff : "Picker",
+        knownBrands: brands
+      });
+      if (res !== null) await loadPickData();
+    }
+
+    function getPrimaryRack(barcode) {
+      const it = itemsMap[barcode];
+      if (!it || !it.rack_codes || !it.rack_codes.length) return "ZZZ-NO-RACK";
+      return [...it.rack_codes].sort()[0];
+    }
+
+    function renderPickList() {
+      const box = document.getElementById("pick-list-container");
+      box.replaceChildren();
+      const q = (document.getElementById("pick-search").value || "").trim().toLowerCase();
+      const selectedBranch = document.getElementById("branch-filter-select").value;
+      const selectedBrand = document.getElementById("pick-brand-filter").value || "ALL";
+
+      // Filter orders:
+      // NOTE: Items explicitly marked NO_STOCK stay in Pending (restock.html handles them),
+      // while stock_quantity === 0 stays ACTIVE here until picker clicks "Move to No Stock"!
+      let filtered = pendingOrders.filter((o) => {
+        const it = itemsMap[o.barcode];
+        if (it && it.item_status === "NO_STOCK") return false;
+        if (viewMode === "branch" && selectedBranch && o.branch_name !== selectedBranch) return false;
+        if (selectedBrand !== "ALL") {
+          const br = MBS_API.resolveOrderBrand(o, itemsMap);
+          if (selectedBrand === "__NONE__" ? br : br !== selectedBrand) return false;
+        }
+        if (q) {
+          const racks = (it && it.rack_codes ? it.rack_codes.join(" ") : "").toLowerCase();
+          const brand = ((it && it.brand) || o.brand || "").toLowerCase();
+          return (
+            o.barcode.toLowerCase().includes(q) ||
+            (o.item_name || "").toLowerCase().includes(q) ||
+            o.branch_name.toLowerCase().includes(q) ||
+            racks.includes(q) ||
+            brand.includes(q)
+          );
+        }
+        return true;
+      });
+
+      if (!filtered.length) {
+        const p = document.createElement("p");
+        p.className = "card";
+        p.style.color = "var(--muted)";
+        p.textContent = t("noData");
+        box.appendChild(p);
+        return;
+      }
+
+      // Group by barcode
+      const groups = new Map();
+      filtered.forEach((o) => {
+        if (!groups.has(o.barcode)) {
+          const it = itemsMap[o.barcode] || {};
+          groups.set(o.barcode, {
+            barcode: o.barcode,
+            item_name: it.item_name || o.item_name || o.barcode,
+            brand: it.brand || o.brand || "-",
+            photo_url: it.photo_url || o.photo_url || "",
+            rack_codes: it.rack_codes || [],
+            is_pick_now: MBS_API.isPickNow(it),
+            primary_rack: getPrimaryRack(o.barcode),
+            has_urgent: false,
+            total_qty: 0,
+            orders: []
+          });
+        }
+        const g = groups.get(o.barcode);
+        g.orders.push(o);
+        g.total_qty += Number(o.qty || 0);
+        if (o.is_urgent) g.has_urgent = true;
+      });
+
+      // Sort: URGENT items first, then Rack Code A -> Z!
+      const sortedGroups = [...groups.values()].sort((a, b) => {
+        if (a.has_urgent !== b.has_urgent) return a.has_urgent ? -1 : 1;
+        return a.primary_rack.localeCompare(b.primary_rack);
+      });
+
+      sortedGroups.forEach((g) => {
+        const card = document.createElement("div");
+        card.className = "item-card" + (g.has_urgent ? " urgent" : "");
+
+        const thumb = document.createElement("div");
+        thumb.className = "item-thumb";
+        if (g.photo_url) {
+          const im = document.createElement("img");
+          im.src = g.photo_url;
+          im.alt = g.item_name;
+          thumb.appendChild(im);
+        } else {
+          thumb.textContent = t("noPhoto");
+        }
+
+        const meta = document.createElement("div");
+        meta.className = "item-meta";
+
+        const top = document.createElement("div");
+        top.className = "flex-between";
+        const leftPills = document.createElement("div");
+        leftPills.className = "flex-row";
+        const rackPill = document.createElement("span");
+        rackPill.className = "badge badge-blue";
+        rackPill.style.fontSize = "0.9rem";
+        rackPill.textContent = "📍 " + (g.rack_codes.length ? g.rack_codes.join(" / ") : "NO RACK");
+        leftPills.appendChild(rackPill);
+        if (g.is_pick_now) {
+          const pnPill = document.createElement("span");
+          pnPill.className = "badge badge-purple";
+          pnPill.textContent = "⚡ PICK NOW";
+          leftPills.appendChild(pnPill);
+        }
+
+        const totalPill = document.createElement("span");
+        totalPill.className = "badge badge-green";
+        totalPill.style.fontSize = "0.9rem";
+        totalPill.textContent = `TOTAL: ${g.total_qty}`;
+        top.append(leftPills, totalPill);
+
+        const nm = document.createElement("div");
+        nm.className = "item-name";
+        nm.style.marginTop = "6px";
+        nm.textContent = g.item_name;
+
+        const sub = document.createElement("div");
+        sub.className = "item-sub flex-row";
+        sub.style.gap = "6px";
+        const subTxt = document.createElement("span");
+        subTxt.textContent = `${g.barcode} • Brand: ${g.brand}`;
+        const brBtn = document.createElement("button");
+        brBtn.type = "button";
+        brBtn.className = "btn btn-sm btn-outline";
+        brBtn.style.cssText = "min-height:26px;padding:2px 7px;font-size:0.74rem;";
+        brBtn.textContent = "🏷 " + t("editBrandBtn");
+        brBtn.onclick = () => editBrandFromPicker(g.barcode, g.brand === "-" ? "" : g.brand, g.item_name);
+        sub.append(subTxt, brBtn);
+
+        meta.append(top, nm, sub);
+
+        // Show every branch's requested qty directly underneath the item!
+        g.orders.forEach((o) => {
+          const row = document.createElement("div");
+          row.className = "branch-split-row" + (o.is_urgent ? " urgent-row" : "");
+
+          const left = document.createElement("div");
+          const bName = document.createElement("strong");
+          bName.textContent = `${o.branch_name} — ×${o.qty}`;
+          left.appendChild(bName);
+
+          if (o.is_urgent) {
+            const uNote = document.createElement("div");
+            uNote.style.cssText = "font-size:0.78rem;color:#991b1b;font-weight:700;";
+            uNote.textContent = `🔥 ${t("urgentTag")} (+${o.urgent_extra_qty || 0}) | 📞 ${o.customer_contact || "-"} | ${o.remark || ""}`;
+            left.appendChild(uNote);
+          } else if (o.remark) {
+            const rNote = document.createElement("div");
+            rNote.style.cssText = "font-size:0.78rem;color:var(--muted);";
+            rNote.textContent = `📝 ${o.remark}`;
+            left.appendChild(rNote);
+          }
+
+          const pickBtn = document.createElement("button");
+          pickBtn.type = "button";
+          pickBtn.className = "btn btn-sm btn-success";
+          pickBtn.textContent = "✓ " + t("pickedBtn");
+          pickBtn.onclick = async () => {
+            pickBtn.disabled = true;
+            const res = await MBS_API.markOrderPicked(o, picker.staff, g.rack_codes.join(", "));
+            // QUOTA-SAFE: Remove locally instead of re-reading entire Firestore!
+            pendingOrders = pendingOrders.filter((x) => x.id !== o.id);
+            if (res && res.alreadyPicked) {
+              showToast(`⚠ ${t("alreadyPickedBy")} ${res.pickedBy}!`);
+            } else {
+              if (res && res.newStockQty !== null && itemsMap[o.barcode]) {
+                itemsMap[o.barcode].stock_quantity = res.newStockQty;
+              }
+              const stkTxt = (res && res.newStockQty !== null) ? ` (Stock: ${res.newStockQty})` : "";
+              showToast(`✓ Picked ${o.branch_name} ×${o.qty}${stkTxt}`);
+            }
+            renderPickList();
+          };
+
+          row.append(left, pickBtn);
+          meta.appendChild(row);
+        });
+
+        // Quick Action: Move Item to No Stock -> moves item to Pending Restock!
+        const footer = document.createElement("div");
+        footer.style.marginTop = "10px";
+        const nsBtn = document.createElement("button");
+        nsBtn.type = "button";
+        nsBtn.className = "btn btn-sm btn-soft-red btn-block";
+        nsBtn.textContent = "✕ " + t("moveNoStockBtn");
+        nsBtn.onclick = async () => {
+          if (!confirm(`${t("moveNoStockBtn")}: ${g.item_name}?`)) return;
+          await MBS_API.moveItemToNoStock(g.barcode, g.item_name, picker.staff, g.rack_codes.join(", "), g.brand, g.photo_url);
+          // QUOTA-SAFE: Update local map directly (0 extra reads!)
+          if (itemsMap[g.barcode]) itemsMap[g.barcode].item_status = "NO_STOCK";
+          else itemsMap[g.barcode] = { barcode: g.barcode, item_name: g.item_name, brand: g.brand, item_status: "NO_STOCK" };
+          showToast(`Moved to No Stock / Pending Restock: ${g.barcode}`);
+          renderPickList();
+        };
+        footer.appendChild(nsBtn);
+        meta.appendChild(footer);
+
+        card.append(thumb, meta);
+        box.appendChild(card);
+      });
+    }
+
+    function renderPickLogs() {
+      const q = (document.getElementById("log-search").value || "").trim().toLowerCase();
+      const tbody = document.getElementById("pick-log-tbody");
+      tbody.replaceChildren();
+
+      const filtered = pickLogs.filter((l) => {
+        if (!q) return true;
+        return (
+          (l.picker_name || "").toLowerCase().includes(q) ||
+          (l.barcode || "").toLowerCase().includes(q) ||
+          (l.item_name || "").toLowerCase().includes(q) ||
+          (l.branch_name || "").toLowerCase().includes(q)
+        );
+      });
+
+      if (!filtered.length) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = 7;
+        td.textContent = t("noData");
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+        return;
+      }
+
+      filtered.forEach((l) => {
+        const tr = document.createElement("tr");
+        const th = document.createElement("th");
+        th.textContent = new Date(l.created_at).toLocaleString();
+
+        const cells = [
+          ["Picker", l.picker_name || "-"],
+          ["Item", `${l.item_name || ""} (${l.barcode || ""})`],
+          ["Branch", l.branch_name || "-"],
+          ["Qty", String(l.qty ?? 0)],
+          ["Rack", l.rack_code || "-"],
+          ["Action", l.action || "PICKED"]
+        ];
+        tr.appendChild(th);
+        cells.forEach(([label, val]) => {
+          const td = document.createElement("td");
+          td.dataset.label = label;
+          if (label === "Action") {
+            const sp = document.createElement("span");
+            sp.className = val === "MOVE_NO_STOCK" ? "badge badge-red" : "badge badge-green";
+            sp.textContent = val;
+            td.appendChild(sp);
+          } else {
+            td.textContent = val;
+          }
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+    }
+
+    document.addEventListener("mbs:langchange", () => { if (picker) renderPickList(); });
+    document.getElementById("pick-tabs").addEventListener("mbs:tabchange", (e) => {
+      if (e.detail === "tab-picklog" && picker) loadLogsTabOnly();
+    });
+
+    document.addEventListener("DOMContentLoaded", async () => {
+      await MBS_API.init();
+      await initPickerLogin();
+      const saved = localStorage.getItem(PICKER_KEY);
+      if (saved) {
+        try {
+          picker = JSON.parse(saved);
+          if (picker && picker.staff) { await enterPicker(); return; }
+        } catch (_) {}
+      }
+    });
+  </script>
+</body>
+</html>

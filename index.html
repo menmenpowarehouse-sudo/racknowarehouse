@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MBS Point-Bin WMS</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="topbar-title">MBS Warehouse WMS</span>
+    </div>
+    <div class="topbar-right">
+      <button type="button" class="user-chip" onclick="MBS_API.openPendingRestockExportDialog()">⬇ Restock</button>
+      <button type="button" id="lang-toggle-btn" class="lang-btn" onclick="toggleLang()">BM / EN</button>
+    </div>
+  </header>
+  <div id="mode-banner" class="demo-banner"></div>
+
+  <main class="container">
+    <section class="card" style="text-align:center;padding:20px 14px;">
+      <h1 data-i18n="portalTitle" style="margin:0 0 6px;font-size:1.3rem;"></h1>
+      <p data-i18n="portalSub" style="margin:0;color:var(--muted);font-size:0.92rem;"></p>
+    </section>
+
+    <nav class="portal-grid" aria-label="WMS Modules">
+      <a class="portal-card" href="putaway.html">
+        <div class="portal-icon" style="background:var(--accent-soft);color:var(--accent);">📦</div>
+        <strong data-i18n="putawayTitle" style="font-size:1.08rem;"></strong>
+        <span data-i18n="putawayDesc" style="font-size:0.86rem;color:var(--muted);"></span>
+      </a>
+
+      <a class="portal-card" href="order.html">
+        <div class="portal-icon" style="background:var(--green-soft);color:var(--green);">🛒</div>
+        <strong data-i18n="orderTitle" style="font-size:1.08rem;"></strong>
+        <span data-i18n="orderDesc" style="font-size:0.86rem;color:var(--muted);"></span>
+      </a>
+
+      <a class="portal-card" href="pick.html">
+        <div class="portal-icon" style="background:var(--amber-soft);color:var(--amber);">📋</div>
+        <strong data-i18n="pickTitle" style="font-size:1.08rem;"></strong>
+        <span data-i18n="pickDesc" style="font-size:0.86rem;color:var(--muted);"></span>
+      </a>
+
+      <a class="portal-card" href="restock.html">
+        <div class="portal-icon" style="background:var(--purple-soft);color:var(--purple);">⚙️</div>
+        <strong data-i18n="restockTitle" style="font-size:1.08rem;"></strong>
+        <span data-i18n="restockDesc" style="font-size:0.86rem;color:var(--muted);"></span>
+      </a>
+    </nav>
+  </main>
+
+  <script src="js/branch.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/api.js"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", () => MBS_API.init());
+  </script>
+</body>
+</html>

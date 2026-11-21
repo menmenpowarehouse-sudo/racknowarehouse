@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MBS Branch Ordering / Pesanan Cawangan</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <a class="home-link" href="index.html" data-i18n="home">Utama</a>
+      <span class="topbar-title" data-i18n="orderTitle"></span>
+    </div>
+    <div class="topbar-right">
+      <button type="button" class="user-chip" onclick="MBS_API.openPendingRestockExportDialog()">⬇ Restock</button>
+      <button type="button" id="branch-user-chip" class="user-chip" hidden onclick="handleLogout()"></button>
+      <button type="button" id="lang-toggle-btn" class="lang-btn" onclick="toggleLang()">BM / EN</button>
+    </div>
+  </header>
+  <div id="mode-banner" class="demo-banner"></div>
+
+  <main class="container">
+    <!-- LOGIN CARD (Permanent in localStorage until Logout) -->
+    <section id="login-section" class="card" style="max-width:440px;margin:24px auto;">
+      <h1 class="card-title" data-i18n="login"></h1>
+      <form id="login-form" onsubmit="handleLogin(event)">
+        <div class="field">
+          <label for="login-branch" data-i18n="branch"></label>
+          <select id="login-branch" required></select>
+        </div>
+        <div class="field">
+          <label for="login-staff" data-i18n="staff"></label>
+          <select id="login-staff" required></select>
+        </div>
+        <div class="field">
+          <label for="login-pw" data-i18n="password"></label>
+          <input type="password" id="login-pw" required autocomplete="current-password" placeholder="Demo pw: 123">
+          <div class="error-msg">Password required.</div>
+        </div>
+        <div id="login-err" class="alert alert-error" hidden></div>
+        <button type="submit" class="btn btn-lg btn-primary btn-block" data-i18n="login"></button>
+      </form>
+    </section>
+
+    <!-- MAIN APP SECTION -->
+    <section id="order-app" hidden>
+      <div class="tabs" id="order-tabs">
+        <div role="tablist" class="tablist" focusgroup="tablist nomemory" aria-label="Branch Order Tabs">
+          <button type="button" role="tab" id="tab-catalog" aria-selected="true" focusgroupstart>
+            📦 <span data-i18n="tabCatalog"></span>
+          </button>
+          <button type="button" role="tab" id="tab-picknow" aria-selected="false">
+            ⚡ <span data-i18n="tabPickNow"></span> (<span id="picknow-badge">0</span>)
+          </button>
+          <button type="button" role="tab" id="tab-trolley" aria-selected="false">
+            🛒 <span data-i18n="tabTrolley"></span> (<span id="trolley-badge">0</span>)
+          </button>
+          <button type="button" role="tab" id="tab-pending" aria-selected="false">
+            📋 <span data-i18n="tabPending"></span> (<span id="pending-badge">0</span>)
+          </button>
+        </div>
+
+        <!-- TAB 1: SELECT ITEMS (Search / Scan / Custom right at the top!) -->
+        <div role="tabpanel" aria-labelledby="tab-catalog">
+          <div class="panel-inner">
+            <!-- Search + Scan + Custom Item Toolbar -->
+            <section class="card">
+              <div class="input-row" style="margin-bottom:8px;">
+                <input type="search" id="catalog-search" data-i18n-placeholder="searchCatalogPlaceholder" oninput="renderCatalog()">
+                <button type="button" class="btn btn-outline" onclick="scanToSearch()">📷</button>
+              </div>
+              <div class="grid-3">
+                <button type="button" class="btn btn-sm btn-soft-blue" onclick="lookupFrom200kSheet()">
+                  🔎 <span data-i18n="searchSheetBtn"></span>
+                </button>
+                <button type="button" class="btn btn-sm btn-soft-amber" onclick="openCustomItemDialog()">
+                  <span data-i18n="customItemBtn"></span>
+                </button>
+                <button type="button" class="btn btn-sm btn-outline" onclick="refreshAllData()">
+                  ↻ <span data-i18n="refresh"></span>
+                </button>
+              </div>
+            </section>
+
+            <!-- Catalog Item Cards -->
+            <div id="catalog-list"></div>
+          </div>
+        </div>
+
+        <!-- TAB 2: DEDICATED PICK NOW ZONE (Freshly Arrived New Stock) -->
+        <div role="tabpanel" aria-labelledby="tab-picknow" hidden="until-found">
+          <div class="panel-inner">
+            <div class="alert" style="background:var(--purple-soft);color:var(--purple);border:1.5px solid #c4b5fd;" data-i18n="pickNowBanner"></div>
+            <section class="card">
+              <div class="input-row">
+                <input type="search" id="picknow-search" data-i18n-placeholder="searchCatalogPlaceholder" oninput="renderPickNow()">
+                <button type="button" class="btn btn-outline" onclick="refreshAllData()">↻</button>
+              </div>
+            </section>
+            <div id="picknow-list"></div>
+          </div>
+        </div>
+
+        <!-- TAB 3: SEPARATE DEDICATED TROLLEY TAB -->
+        <div role="tabpanel" aria-labelledby="tab-trolley" hidden="until-found">
+          <div class="panel-inner">
+            <section class="card" style="border:2px solid var(--accent);">
+              <div class="card-title">
+                <span>🛒 <span data-i18n="trolleyTitle"></span></span>
+                <div class="flex-row">
+                  <span id="trolley-count-pill" class="badge badge-blue">0</span>
+                  <button type="button" id="btn-clear-trolley" class="btn btn-sm btn-soft-red" onclick="clearTrolley()" hidden data-i18n="clearTrolleyBtn"></button>
+                </div>
+              </div>
+              <div id="trolley-list"></div>
+              <button type="button" id="btn-submit-trolley" class="btn btn-lg btn-success btn-block" style="margin-top:12px;" onclick="submitTrolley()" disabled>
+                ✓ <span data-i18n="submitOrder"></span>
+              </button>
+            </section>
+          </div>
+        </div>
+
+        <!-- TAB 4: HISTORY & PENDING (Auto-stays pending until picked; Add Qty -> Urgent) -->
+        <div role="tabpanel" aria-labelledby="tab-pending" hidden="until-found">
+          <div class="panel-inner">
+            <div class="alert alert-info" data-i18n="pendingHelp"></div>
+            <section class="card">
+              <div class="flex-between" style="margin-bottom:8px;">
+                <strong id="pending-section-title">Pending Orders</strong>
+                <button type="button" class="btn btn-sm btn-outline" onclick="refreshAllData()">↻ <span data-i18n="refresh"></span></button>
+              </div>
+              <div class="input-row">
+                <select id="branch-pending-brand-filter" onchange="renderPendingOrders()"></select>
+                <button type="button" class="btn btn-sm btn-success" onclick="exportBranchPendingCsv()">
+                  ⬇ <span data-i18n="exportPendingCsv"></span>
+                </button>
+              </div>
+            </section>
+            <div id="pending-orders-list"></div>
+
+            <h3 style="margin:18px 0 8px;font-size:0.95rem;color:var(--muted);">Completed / Picked History</h3>
+            <div id="picked-orders-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sticky Floating Bottom Bar (only shown on Select Items tab when trolley has items) -->
+      <div id="floating-trolley-bar" class="floating-trolley-bar" hidden>
+        <div id="floating-trolley-text" style="font-weight:700;font-size:0.92rem;"></div>
+        <button type="button" class="btn btn-sm btn-primary" onclick="document.getElementById('tab-trolley').click()">
+          <span data-i18n="viewTrolleyBtn"></span> →
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <!-- DIALOG: Custom Manual Item -->
+  <dialog id="custom-item-dialog" closedby="any" aria-labelledby="custom-dlg-title">
+    <div class="dialog-header">
+      <h2 id="custom-dlg-title" data-i18n="customItemBtn"></h2>
+      <button type="button" class="btn btn-sm btn-outline" onclick="document.getElementById('custom-item-dialog').close()" data-i18n="close"></button>
+    </div>
+    <form class="dialog-body" onsubmit="addCustomItemToTrolley(event)">
+      <div class="field">
+        <label for="cust-code" data-i18n="barcode"></label>
+        <input type="text" id="cust-code" required placeholder="e.g. CUSTOM-001 or SKU">
+      </div>
+      <div class="field">
+        <label for="cust-name" data-i18n="itemName"></label>
+        <input type="text" id="cust-name" required placeholder="Item description">
+      </div>
+      <div class="field">
+        <label for="cust-qty" data-i18n="qty"></label>
+        <input type="number" id="cust-qty" min="1" value="1" required>
+      </div>
+      <div class="field">
+        <label for="cust-remark" data-i18n="remark"></label>
+        <textarea id="cust-remark" placeholder="Optional note for warehouse"></textarea>
+      </div>
+      <button type="submit" class="btn btn-lg btn-primary btn-block" data-i18n="addToCart"></button>
+    </form>
+  </dialog>
+
+  <!-- DIALOG: Add Quantity & Escalate to Urgent Order -->
+  <dialog id="urgent-dialog" closedby="any" aria-labelledby="urgent-dlg-title">
+    <div class="dialog-header" style="background:var(--red-soft);">
+      <h2 id="urgent-dlg-title" style="color:var(--red);" data-i18n="urgentModalTitle"></h2>
+      <button type="button" class="btn btn-sm btn-outline" onclick="document.getElementById('urgent-dialog').close()" data-i18n="close"></button>
+    </div>
+    <form class="dialog-body" onsubmit="submitUrgentEscalation(event)">
+      <div id="urgent-item-summary" class="alert alert-warn"></div>
+      <input type="hidden" id="urgent-order-id">
+      <div class="field">
+        <label for="urgent-extra-qty" data-i18n="extraQty"></label>
+        <input type="number" id="urgent-extra-qty" min="1" value="1" required>
+      </div>
+      <div class="field">
+        <label for="urgent-contact" data-i18n="custContact"></label>
+        <input type="tel" id="urgent-contact" required placeholder="e.g. Cikgu Ali 012-3456789">
+      </div>
+      <div class="field">
+        <label for="urgent-remark" data-i18n="remark"></label>
+        <textarea id="urgent-remark" required placeholder="e.g. Customer urgent add-on / Sekolah nak esok"></textarea>
+      </div>
+      <button type="submit" class="btn btn-lg btn-danger btn-block" data-i18n="confirmUrgent"></button>
+    </form>
+  </dialog>
+
+  <script src="js/branch.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/scanner.js"></script>
+  <script src="js/api.js"></script>
+  <script>
+    const SESSION_KEY = "mbs_order_session";
+    let session = null; // { branch, staff }
+    let accounts = [];
+    let catalogItems = [];
+    let branchOrders = [];
+    let trolley = []; // [{ barcode, item_name, brand, photo_url, qty, is_custom, remark }]
+
+    async function loadLoginOptions() {
+      accounts = (await MBS_API.listAccounts()).filter((a) => a.active !== false);
+      const branches = [...new Set(accounts.map((a) => a.branch))];
+      const bSel = document.getElementById("login-branch");
+      bSel.replaceChildren();
+      branches.forEach((b) => {
+        const opt = document.createElement("option");
+        opt.value = b;
+        opt.textContent = b;
+        bSel.appendChild(opt);
+      });
+      bSel.onchange = populateStaffSelect;
+      populateStaffSelect();
+    }
+
+    function populateStaffSelect() {
+      const b = document.getElementById("login-branch").value;
+      const sSel = document.getElementById("login-staff");
+      sSel.replaceChildren();
+      accounts.filter((a) => a.branch === b).forEach((a) => {
+        const opt = document.createElement("option");
+        opt.value = a.staff;
+        opt.textContent = a.staff;
+        sSel.appendChild(opt);
+      });
+    }
+
+    function handleLogin(e) {
+      e.preventDefault();
+      const b = document.getElementById("login-branch").value;
+      const s = document.getElementById("login-staff").value;
+      const pw = document.getElementById("login-pw").value;
+      const match = accounts.find((a) => a.branch === b && a.staff === s && String(a.password) === String(pw));
+      const err = document.getElementById("login-err");
+      if (!match) {
+        err.textContent = t("wrongLogin");
+        err.hidden = false;
+        return;
+      }
+      err.hidden = true;
+      session = { branch: match.branch, staff: match.staff };
+      localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+      enterApp();
+    }
+
+    function handleLogout() {
+      if (!confirm(`${t("logout")} (${session.branch} - ${session.staff})?`)) return;
+      localStorage.removeItem(SESSION_KEY);
+      session = null;
+      document.getElementById("order-app").hidden = true;
+      document.getElementById("branch-user-chip").hidden = true;
+      document.getElementById("login-section").hidden = false;
+    }
+
+    async function enterApp() {
+      document.getElementById("login-section").hidden = true;
+      document.getElementById("order-app").hidden = false;
+      const chip = document.getElementById("branch-user-chip");
+      chip.hidden = false;
+      chip.textContent = `🏪 ${session.branch} (${session.staff}) ⏻`;
+      await refreshAllData();
+    }
+
+    async function refreshAllData() {
+      if (!session) return;
+      catalogItems = await MBS_API.listItems();
+      branchOrders = await MBS_API.listOrders({ branch_name: session.branch });
+      populateBranchBrandFilter();
+      renderTrolley();
+      renderCatalog();
+      renderPickNow();
+      renderPendingOrders();
+    }
+
+    function populateBranchBrandFilter() {
+      const sel = document.getElementById("branch-pending-brand-filter");
+      if (!sel) return;
+      const prev = sel.value || "ALL";
+      const brands = MBS_API.collectBrands(catalogItems, branchOrders);
+      sel.replaceChildren();
+      const allOpt = document.createElement("option");
+      allOpt.value = "ALL";
+      allOpt.textContent = t("allBrands");
+      sel.appendChild(allOpt);
+      const noneOpt = document.createElement("option");
+      noneOpt.value = "__NONE__";
+      noneOpt.textContent = t("noBrandTag");
+      sel.appendChild(noneOpt);
+      brands.forEach((b) => {
+        const opt = document.createElement("option");
+        opt.value = b;
+        opt.textContent = b;
+        sel.appendChild(opt);
+      });
+      if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+    }
+
+    function exportBranchPendingCsv() {
+      const itemMap = Object.fromEntries(catalogItems.map((i) => [i.barcode, i]));
+      const brandFilter = document.getElementById("branch-pending-brand-filter")?.value || "ALL";
+      MBS_API.exportPendingOrdersCsv({
+        orders: branchOrders,
+        itemsMap: itemMap,
+        brandFilter,
+        scopeLabel: session ? session.branch : "BRANCH"
+      });
+    }
+
+    async function editBrandFromOrder(barcode, currentBrand, itemName) {
+      const brands = MBS_API.collectBrands(catalogItems, branchOrders);
+      const res = await MBS_API.openBrandEditor({
+        barcode,
+        currentBrand,
+        itemName,
+        staffName: session ? `${session.staff} (${session.branch})` : "Branch",
+        knownBrands: brands
+      });
+      if (res !== null) await refreshAllData();
+    }
+
+    function buildCatalogCard(it, pendingCodes) {
+      const isPN = MBS_API.isPickNow(it);
+      const card = document.createElement("div");
+      card.className = "item-card" + (it.item_status === "NO_STOCK" ? " no-stock" : "");
+      if (isPN && it.item_status !== "NO_STOCK") {
+        card.style.borderColor = "#a78bfa";
+      }
+
+      const thumb = document.createElement("div");
+      thumb.className = "item-thumb";
+      if (it.photo_url) {
+        const im = document.createElement("img");
+        im.src = it.photo_url;
+        im.alt = it.item_name || it.barcode;
+        thumb.appendChild(im);
+      } else {
+        thumb.textContent = t("noPhoto");
+      }
+
+      const meta = document.createElement("div");
+      meta.className = "item-meta";
+
+      const nm = document.createElement("div");
+      nm.className = "item-name";
+      nm.textContent = it.item_name || it.barcode;
+
+      const sub = document.createElement("div");
+      sub.className = "item-sub flex-row";
+      sub.style.gap = "6px";
+      const subTxt = document.createElement("span");
+      subTxt.textContent = `${it.barcode} • ${it.brand || "-"}`;
+      const brBtn = document.createElement("button");
+      brBtn.type = "button";
+      brBtn.className = "btn btn-sm btn-outline";
+      brBtn.style.cssText = "min-height:26px;padding:2px 7px;font-size:0.74rem;";
+      brBtn.textContent = "🏷 " + t("editBrandBtn");
+      brBtn.onclick = () => editBrandFromOrder(it.barcode, it.brand || "", it.item_name || it.barcode);
+      sub.append(subTxt, brBtn);
+
+      const badges = document.createElement("div");
+      badges.className = "flex-row";
+      badges.style.marginBottom = "8px";
+
+      if (isPN) {
+        const bPn = document.createElement("span");
+        bPn.className = "badge badge-purple";
+        bPn.textContent = "⚡ PICK NOW";
+        badges.appendChild(bPn);
+      }
+
+      const bQty = document.createElement("span");
+      bQty.className = "badge badge-blue";
+      bQty.textContent = `Stock: ${it.stock_quantity ?? "-"}`;
+      badges.appendChild(bQty);
+
+      if (it.item_status === "NO_STOCK") {
+        const bNs = document.createElement("span");
+        bNs.className = "badge badge-red";
+        bNs.textContent = "NO STOCK";
+        badges.appendChild(bNs);
+      }
+      if (pendingCodes.has(it.barcode)) {
+        const bPen = document.createElement("span");
+        bPen.className = "badge badge-amber";
+        bPen.textContent = "Already in Pending";
+        badges.appendChild(bPen);
+      }
+
+      const ctrl = document.createElement("div");
+      ctrl.className = "input-row";
+      const qtyInput = document.createElement("input");
+      qtyInput.type = "number";
+      qtyInput.min = "1";
+      qtyInput.value = "1";
+      qtyInput.style.maxWidth = "90px";
+      qtyInput.setAttribute("aria-label", "Quantity");
+
+      const addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.className = "btn btn-sm btn-primary";
+      addBtn.textContent = "+ " + t("addToCart");
+      addBtn.onclick = () => {
+        const qVal = Math.max(1, Number(qtyInput.value) || 1);
+        addToTrolley({
+          barcode: it.barcode,
+          item_name: it.item_name || it.barcode,
+          brand: it.brand || "",
+          photo_url: it.photo_url || "",
+          qty: qVal,
+          is_custom: false,
+          remark: ""
+        });
+      };
+
+      ctrl.append(qtyInput, addBtn);
+      meta.append(nm, sub, badges, ctrl);
+      card.append(thumb, meta);
+      return card;
+    }
+
+    function renderCatalog() {
+      const q = (document.getElementById("catalog-search").value || "").trim().toLowerCase();
+      const box = document.getElementById("catalog-list");
+      box.replaceChildren();
+
+      const filtered = catalogItems.filter((it) => {
+        if (!q) return true;
+        return (
+          (it.barcode || "").toLowerCase().includes(q) ||
+          (it.item_name || "").toLowerCase().includes(q) ||
+          (it.brand || "").toLowerCase().includes(q)
+        );
+      });
+
+      if (!filtered.length) {
+        const p = document.createElement("p");
+        p.className = "card";
+        p.style.color = "var(--muted)";
+        p.textContent = t("noData");
+        box.appendChild(p);
+        return;
+      }
+
+      const pendingCodes = new Set(branchOrders.filter((o) => o.status === "PENDING").map((o) => o.barcode));
+      filtered.forEach((it) => box.appendChild(buildCatalogCard(it, pendingCodes)));
+    }
+
+    function renderPickNow() {
+      const allPickNow = catalogItems.filter((it) => MBS_API.isPickNow(it));
+      document.getElementById("picknow-badge").textContent = allPickNow.length;
+
+      const q = (document.getElementById("picknow-search").value || "").trim().toLowerCase();
+      const box = document.getElementById("picknow-list");
+      box.replaceChildren();
+
+      const filtered = allPickNow.filter((it) => {
+        if (!q) return true;
+        return (
+          (it.barcode || "").toLowerCase().includes(q) ||
+          (it.item_name || "").toLowerCase().includes(q) ||
+          (it.brand || "").toLowerCase().includes(q)
+        );
+      });
+
+      if (!filtered.length) {
+        const p = document.createElement("p");
+        p.className = "card";
+        p.style.color = "var(--muted)";
+        p.textContent = t("noData");
+        box.appendChild(p);
+        return;
+      }
+
+      const pendingCodes = new Set(branchOrders.filter((o) => o.status === "PENDING").map((o) => o.barcode));
+      filtered.forEach((it) => box.appendChild(buildCatalogCard(it, pendingCodes)));
+    }
+
+    function addToTrolley(entry) {
+      const existing = trolley.find((x) => x.barcode === entry.barcode);
+      if (existing) {
+        existing.qty += entry.qty;
+      } else {
+        trolley.push(entry);
+      }
+      renderTrolley();
+      showToast(`+ ${entry.item_name} (×${entry.qty})`);
+    }
+
+    function updateFloatingTrolleyBar() {
+      const bar = document.getElementById("floating-trolley-bar");
+      const txt = document.getElementById("floating-trolley-text");
+      const onBrowsingTab =
+        document.getElementById("tab-catalog").getAttribute("aria-selected") === "true" ||
+        document.getElementById("tab-picknow").getAttribute("aria-selected") === "true";
+      if (!session || !onBrowsingTab || trolley.length === 0) {
+        bar.hidden = true;
+        return;
+      }
+      const totalUnits = trolley.reduce((s, x) => s + (Number(x.qty) || 0), 0);
+      txt.textContent = getLang() === "bm"
+        ? `🛒 ${trolley.length} item dalam troli (${totalUnits} unit)`
+        : `🛒 ${trolley.length} items in trolley (${totalUnits} units)`;
+      bar.hidden = false;
+    }
+
+    function clearTrolley() {
+      if (!trolley.length) return;
+      if (!confirm(t("clearTrolleyBtn") + "?")) return;
+      trolley = [];
+      renderTrolley();
+    }
+
+    function renderTrolley() {
+      const box = document.getElementById("trolley-list");
+      box.replaceChildren();
+      document.getElementById("trolley-badge").textContent = trolley.length;
+      document.getElementById("trolley-count-pill").textContent = trolley.length;
+      document.getElementById("btn-submit-trolley").disabled = trolley.length === 0;
+      document.getElementById("btn-clear-trolley").hidden = trolley.length === 0;
+      updateFloatingTrolleyBar();
+
+      if (!trolley.length) {
+        const p = document.createElement("p");
+        p.style.cssText = "margin:0;font-size:0.86rem;color:var(--muted);";
+        p.textContent = t("emptyTrolley");
+        box.appendChild(p);
+        return;
+      }
+
+      trolley.forEach((line, idx) => {
+        const row = document.createElement("div");
+        row.className = "branch-split-row";
+        const left = document.createElement("div");
+        const title = document.createElement("strong");
+        title.textContent = line.item_name;
+        const sub = document.createElement("div");
+        sub.style.cssText = "font-size:0.78rem;color:var(--muted);";
+        sub.textContent = `${line.barcode}${line.is_custom ? " [CUSTOM]" : ""}`;
+        left.append(title, sub);
+
+        const right = document.createElement("div");
+        right.className = "flex-row";
+        const qIn = document.createElement("input");
+        qIn.type = "number";
+        qIn.min = "1";
+        qIn.value = line.qty;
+        qIn.style.width = "72px";
+        qIn.style.minHeight = "36px";
+        qIn.onchange = () => { line.qty = Math.max(1, Number(qIn.value) || 1); updateFloatingTrolleyBar(); };
+
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "btn btn-sm btn-soft-red";
+        del.textContent = "✕";
+        del.onclick = () => { trolley.splice(idx, 1); renderTrolley(); };
+
+        right.append(qIn, del);
+        row.append(left, right);
+        box.appendChild(row);
+      });
+    }
+
+    async function submitTrolley() {
+      if (!trolley.length || !session) return;
+      const btn = document.getElementById("btn-submit-trolley");
+      btn.disabled = true;
+      try {
+        await MBS_API.submitOrderLines(session.branch, session.staff, trolley);
+        trolley = [];
+        showToast(t("orderSubmitted"));
+        await refreshAllData();
+        // Switch automatically to History & Pending tab so user sees submitted items!
+        document.getElementById("tab-pending").click();
+      } catch (err) {
+        showToast("Error: " + err.message);
+      } finally {
+        btn.disabled = trolley.length === 0;
+      }
+    }
+
+    async function scanToSearch() {
+      const code = await openTripleScanner({ title: t("scan") });
+      if (!code) return;
+      document.getElementById("catalog-search").value = code;
+      renderCatalog();
+      if (!catalogItems.some((i) => i.barcode === code)) {
+        await lookupFrom200kSheet();
+      }
+    }
+
+    async function lookupFrom200kSheet() {
+      const code = (document.getElementById("catalog-search").value || "").trim();
+      if (!code) return showToast("Enter exact barcode to search 200k Sheet.");
+      showToast(t("loading"));
+      const res = await MBS_API.lookupItem(code);
+      if (res.found && res.item) {
+        addToTrolley({
+          barcode: res.item.barcode,
+          item_name: res.item.item_name || res.item.barcode,
+          brand: res.item.brand || "",
+          photo_url: res.item.photo_url || "",
+          qty: 1,
+          is_custom: false,
+          remark: ""
+        });
+      } else {
+        showToast("Not found in Sheet — use [+ Custom Item]");
+        openCustomItemDialog(code);
+      }
+    }
+
+    function openCustomItemDialog(prefillCode = "") {
+      document.getElementById("cust-code").value = prefillCode;
+      document.getElementById("cust-name").value = "";
+      document.getElementById("cust-qty").value = "1";
+      document.getElementById("cust-remark").value = "";
+      document.getElementById("custom-item-dialog").showModal();
+    }
+
+    function addCustomItemToTrolley(e) {
+      e.preventDefault();
+      addToTrolley({
+        barcode: document.getElementById("cust-code").value.trim(),
+        item_name: document.getElementById("cust-name").value.trim(),
+        brand: "CUSTOM",
+        photo_url: "",
+        qty: Math.max(1, Number(document.getElementById("cust-qty").value) || 1),
+        is_custom: true,
+        remark: document.getElementById("cust-remark").value.trim()
+      });
+      document.getElementById("custom-item-dialog").close();
+    }
+
+    function renderPendingOrders() {
+      const allPending = branchOrders.filter((o) => o.status === "PENDING");
+      const picked = branchOrders.filter((o) => o.status === "PICKED");
+      document.getElementById("pending-badge").textContent = allPending.length;
+
+      const itemMap = Object.fromEntries(catalogItems.map((i) => [i.barcode, i]));
+      const brandFilter = document.getElementById("branch-pending-brand-filter")?.value || "ALL";
+      const pending = allPending.filter((o) => {
+        if (brandFilter === "ALL") return true;
+        const br = MBS_API.resolveOrderBrand(o, itemMap);
+        if (brandFilter === "__NONE__") return !br;
+        return br === brandFilter;
+      });
+
+      const pBox = document.getElementById("pending-orders-list");
+      pBox.replaceChildren();
+      if (!pending.length) {
+        const p = document.createElement("p");
+        p.className = "card";
+        p.style.color = "var(--muted)";
+        p.textContent = t("noData");
+        pBox.appendChild(p);
+      } else {
+        pending.forEach((o) => {
+          const liveItem = itemMap[o.barcode];
+          const curBrand = MBS_API.resolveOrderBrand(o, itemMap);
+          const isNoStock = liveItem && liveItem.item_status === "NO_STOCK";
+          const card = document.createElement("div");
+          card.className = "item-card" + (o.is_urgent ? " urgent" : isNoStock ? " no-stock" : "");
+
+          const meta = document.createElement("div");
+          meta.className = "item-meta";
+
+          const top = document.createElement("div");
+          top.className = "flex-between";
+          const nm = document.createElement("div");
+          nm.className = "item-name";
+          nm.textContent = o.item_name;
+
+          const qtyBadge = document.createElement("span");
+          qtyBadge.className = "badge badge-blue";
+          qtyBadge.textContent = `Qty: ${o.qty}`;
+          top.append(nm, qtyBadge);
+
+          const sub = document.createElement("div");
+          sub.className = "item-sub";
+          sub.textContent = `${o.barcode} • Brand: ${curBrand || "-"} • ${new Date(o.updated_at || o.created_at).toLocaleString()}`;
+
+          const badges = document.createElement("div");
+          badges.className = "flex-row";
+          badges.style.marginBottom = "8px";
+
+          const stB = document.createElement("span");
+          stB.className = isNoStock ? "badge badge-red" : "badge badge-amber";
+          stB.textContent = isNoStock ? "PENDING (NO STOCK AT RACK)" : "PENDING PICK";
+          badges.appendChild(stB);
+
+          if (o.is_urgent) {
+            const uB = document.createElement("span");
+            uB.className = "badge badge-red";
+            uB.textContent = `🔥 URGENT (+${o.urgent_extra_qty || 0})`;
+            badges.appendChild(uB);
+          }
+
+          meta.append(top, sub, badges);
+
+          if (o.customer_contact || o.remark) {
+            const info = document.createElement("div");
+            info.style.cssText = "font-size:0.82rem;color:#991b1b;font-weight:700;margin-bottom:8px;";
+            info.textContent = `📞 ${o.customer_contact || "-"} | ${o.remark || ""}`;
+            meta.appendChild(info);
+          }
+
+          const actRow = document.createElement("div");
+          actRow.className = "flex-row";
+          const urgBtn = document.createElement("button");
+          urgBtn.type = "button";
+          urgBtn.className = "btn btn-sm btn-soft-red";
+          urgBtn.textContent = t("addUrgentBtn");
+          urgBtn.onclick = () => openUrgentDialog(o);
+
+          const brBtn = document.createElement("button");
+          brBtn.type = "button";
+          brBtn.className = "btn btn-sm btn-outline";
+          brBtn.textContent = "🏷 " + t("editBrandBtn");
+          brBtn.onclick = () => editBrandFromOrder(o.barcode, curBrand, o.item_name);
+
+          actRow.append(urgBtn, brBtn);
+          meta.appendChild(actRow);
+
+          card.appendChild(meta);
+          pBox.appendChild(card);
+        });
+      }
+
+      const dBox = document.getElementById("picked-orders-list");
+      dBox.replaceChildren();
+      if (!picked.length) {
+        const p = document.createElement("p");
+        p.style.cssText = "color:var(--muted);font-size:0.86rem;";
+        p.textContent = t("noData");
+        dBox.appendChild(p);
+      } else {
+        picked.slice(0, 30).forEach((o) => {
+          const row = document.createElement("div");
+          row.className = "branch-split-row";
+          const left = document.createElement("div");
+          const nm = document.createElement("strong");
+          nm.textContent = o.item_name;
+          const sub = document.createElement("div");
+          sub.style.cssText = "font-size:0.78rem;color:var(--muted);";
+          sub.textContent = `${o.barcode} • Picked by ${o.picked_by || "-"}`;
+          left.append(nm, sub);
+          const b = document.createElement("span");
+          b.className = "badge badge-green";
+          b.textContent = `✓ ×${o.qty}`;
+          row.append(left, b);
+          dBox.appendChild(row);
+        });
+      }
+    }
+
+    function openUrgentDialog(order) {
+      document.getElementById("urgent-order-id").value = order.id;
+      document.getElementById("urgent-item-summary").textContent = `${order.item_name} (${order.barcode}) — Current Pending Qty: ${order.qty}`;
+      document.getElementById("urgent-extra-qty").value = "1";
+      document.getElementById("urgent-contact").value = order.customer_contact || "";
+      document.getElementById("urgent-remark").value = "";
+      document.getElementById("urgent-dialog").showModal();
+    }
+
+    async function submitUrgentEscalation(e) {
+      e.preventDefault();
+      const id = document.getElementById("urgent-order-id").value;
+      const addQty = Number(document.getElementById("urgent-extra-qty").value) || 1;
+      const contact = document.getElementById("urgent-contact").value.trim();
+      const remark = document.getElementById("urgent-remark").value.trim();
+      await MBS_API.escalateOrderUrgent(id, addQty, contact, remark);
+      document.getElementById("urgent-dialog").close();
+      showToast("🔥 Escalated to Urgent Order!");
+      await refreshAllData();
+    }
+
+    document.addEventListener("mbs:langchange", () => {
+      if (session) { renderCatalog(); renderPickNow(); renderTrolley(); renderPendingOrders(); }
+    });
+    document.getElementById("order-tabs").addEventListener("mbs:tabchange", () => {
+      updateFloatingTrolleyBar();
+    });
+
+    document.addEventListener("DOMContentLoaded", async () => {
+      await MBS_API.init();
+      await loadLoginOptions();
+
+      // Support ?debugBranch=MBS WORLD from Admin page
+      const params = new URLSearchParams(location.search);
+      const dbgBranch = params.get("debugBranch");
+      if (dbgBranch) {
+        session = { branch: dbgBranch, staff: "Admin Debug" };
+        await enterApp();
+        return;
+      }
+
+      const saved = localStorage.getItem(SESSION_KEY);
+      if (saved) {
+        try {
+          session = JSON.parse(saved);
+          if (session && session.branch) {
+            await enterApp();
+            return;
+          }
+        } catch (_) {}
+      }
+    });
+  </script>
+</body>
+</html>

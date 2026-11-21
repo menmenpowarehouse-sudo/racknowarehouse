@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MBS Restock & Admin Console</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <a class="home-link" href="index.html" data-i18n="home">Utama</a>
+      <span class="topbar-title" data-i18n="restockTitle"></span>
+    </div>
+    <div class="topbar-right">
+      <button type="button" class="user-chip" onclick="MBS_API.openPendingRestockExportDialog()">⬇ Restock</button>
+      <button type="button" class="user-chip" onclick="loadAdminAll()">↻</button>
+      <button type="button" id="lang-toggle-btn" class="lang-btn" onclick="toggleLang()">BM / EN</button>
+    </div>
+  </header>
+  <div id="mode-banner" class="demo-banner"></div>
+
+  <main class="container">
+    <div class="tabs" id="admin-tabs">
+      <div role="tablist" class="tablist" focusgroup="tablist nomemory" aria-label="Admin & Restock Sections">
+        <button type="button" role="tab" id="tab-restock" aria-selected="true" focusgroupstart>
+          <span data-i18n="tabRestockQueue"></span> (<span id="restock-count">0</span>)
+        </button>
+        <button type="button" role="tab" id="tab-branches" aria-selected="false" data-i18n="tabBranchStaff"></button>
+        <button type="button" role="tab" id="tab-items" aria-selected="false" data-i18n="tabItemEditor"></button>
+        <button type="button" role="tab" id="tab-debug" aria-selected="false" data-i18n="tabAdminTools"></button>
+      </div>
+
+      <!-- TAB 1: PENDING RESTOCK QUEUE + ADMIN PENDING ORDER EXPORT -->
+      <div role="tabpanel" aria-labelledby="tab-restock">
+        <div class="panel-inner">
+          <section class="card" style="border:2px solid var(--green);">
+            <div class="card-title">
+              <span>📋 Pending Orders Export (All Branches: <span id="admin-pending-total">0</span>)</span>
+            </div>
+            <div class="grid-3">
+              <select id="admin-pending-brand-filter"></select>
+              <select id="admin-pending-branch-filter"></select>
+              <button type="button" class="btn btn-sm btn-success" onclick="exportAdminPendingCsv()">
+                ⬇ <span data-i18n="exportPendingCsv"></span>
+              </button>
+            </div>
+          </section>
+          <div id="restock-queue-list"></div>
+        </div>
+      </div>
+
+      <!-- TAB 2: BRANCH & STAFF MANAGER -->
+      <div role="tabpanel" aria-labelledby="tab-branches" hidden="until-found">
+        <div class="panel-inner">
+          <section class="card">
+            <h2 class="card-title">Add / Update Branch & Staff</h2>
+            <form onsubmit="saveAccountForm(event)" class="grid-2">
+              <div class="field">
+                <label for="acc-branch" data-i18n="branch"></label>
+                <input type="text" id="acc-branch" required placeholder="e.g. MBS WORLD">
+              </div>
+              <div class="field">
+                <label for="acc-staff" data-i18n="staff"></label>
+                <input type="text" id="acc-staff" required placeholder="e.g. Farah">
+              </div>
+              <div class="field">
+                <label for="acc-pw" data-i18n="password"></label>
+                <input type="text" id="acc-pw" required value="123">
+              </div>
+              <div class="field">
+                <label for="acc-role">Role</label>
+                <select id="acc-role">
+                  <option value="BRANCH">BRANCH</option>
+                  <option value="PICKER">PICKER</option>
+                  <option value="PUTAWAY">PUTAWAY</option>
+                  <option value="ADMIN">ADMIN</option>
+                </select>
+              </div>
+              <div style="grid-column:1 / -1;" class="grid-2">
+                <button type="submit" class="btn btn-primary" data-i18n="save"></button>
+                <button type="button" class="btn btn-outline" onclick="downloadBranchJs()">⬇ <span data-i18n="exportBranchJs"></span></button>
+              </div>
+            </form>
+          </section>
+
+          <section class="card">
+            <div tabindex="0" role="region" aria-labelledby="acc-table-cap" class="table-wrapper">
+              <table class="data-table">
+                <caption id="acc-table-cap">Branch & Staff Accounts</caption>
+                <thead>
+                  <tr>
+                    <th>Branch</th>
+                    <th>Staff</th>
+                    <th>Password</th>
+                    <th>Role</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="accounts-tbody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <!-- TAB 3: ITEM / PHOTO EDITOR & WAREHOUSE STOCK LISTING EXPORT -->
+      <div role="tabpanel" aria-labelledby="tab-items" hidden="until-found">
+        <div class="panel-inner">
+          <section class="card">
+            <div class="flex-between" style="margin-bottom:10px;">
+              <strong>Warehouse Stock Listing (<span id="stock-total-count">0</span> items in Firebase)</strong>
+              <button type="button" class="btn btn-sm btn-success" onclick="exportWarehouseStockCsv()">
+                ⬇ <span data-i18n="exportStockCsv"></span>
+              </button>
+            </div>
+            <input type="search" id="admin-item-search" placeholder="Search barcode, name, rack, brand..." oninput="renderItemsTable()" style="margin-bottom:10px;">
+
+            <div tabindex="0" role="region" aria-labelledby="stock-table-cap" class="table-wrapper">
+              <table class="data-table">
+                <caption id="stock-table-cap">Firebase Warehouse Stock Listing</caption>
+                <thead>
+                  <tr>
+                    <th>Barcode</th>
+                    <th>Photo</th>
+                    <th>Item Name & Brand</th>
+                    <th>Racks</th>
+                    <th>Stock Qty</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="admin-items-tbody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <!-- TAB 4: QUICK DEBUG LAUNCHER & LOGS -->
+      <div role="tabpanel" aria-labelledby="tab-debug" hidden="until-found">
+        <div class="panel-inner">
+          <section class="card">
+            <h2 class="card-title">Quick Page Launcher & Branch Debug</h2>
+            <div class="grid-3" style="margin-bottom:12px;">
+              <a class="btn btn-primary" href="putaway.html" target="_blank">📦 putaway.html</a>
+              <a class="btn btn-warning" href="pick.html" target="_blank">📋 pick.html</a>
+              <a class="btn btn-success" href="order.html" target="_blank">🛒 order.html</a>
+            </div>
+            <div class="input-row">
+              <select id="debug-branch-select"></select>
+              <button type="button" class="btn btn-soft-blue" onclick="launchBranchDebug()">Test Order Page as Branch ↗</button>
+            </div>
+            <div style="margin-top:12px;" class="flex-row">
+              <span id="quota-meter-badge" class="badge badge-blue">Firestore Session: 0 Reads / 0 Writes</span>
+              <button type="button" class="btn btn-sm btn-outline" onclick="clearCacheAndReload()">Force Full Sync (Clear Local Cache)</button>
+              <button type="button" class="btn btn-sm btn-soft-red" onclick="resetDemo()">Reset Local Demo Data (Demo Mode Only)</button>
+            </div>
+          </section>
+
+          <section class="card">
+            <h2 class="card-title">🔥 Active Urgent Orders</h2>
+            <div id="admin-urgent-list"></div>
+          </section>
+
+          <section class="card">
+            <h2 class="card-title">Recent Picking Logs (Latest 1,000)</h2>
+            <div tabindex="0" role="region" aria-labelledby="admin-log-cap" class="table-wrapper">
+              <table class="data-table">
+                <caption id="admin-log-cap">Picking Activity Log</caption>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Picker</th>
+                    <th>Item</th>
+                    <th>Branch</th>
+                    <th>Qty</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="admin-log-tbody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- DIALOG: Admin Edit Item & Photo -->
+  <dialog id="admin-item-dialog" closedby="any" aria-labelledby="admin-item-dlg-title">
+    <div class="dialog-header">
+      <h2 id="admin-item-dlg-title">Edit Item & Photo</h2>
+      <button type="button" class="btn btn-sm btn-outline" onclick="document.getElementById('admin-item-dialog').close()" data-i18n="close"></button>
+    </div>
+    <form class="dialog-body" onsubmit="saveAdminItemEdit(event)">
+      <div class="flex-row" style="align-items:flex-start;margin-bottom:12px;">
+        <div class="photo-box">
+          <div class="photo-placeholder" id="adm-photo-ph" data-i18n="noPhoto"></div>
+          <img id="adm-photo-img" alt="Item" hidden>
+          <button type="button" class="photo-edit-btn" onclick="document.getElementById('adm-photo-file').click()">📷 Edit</button>
+          <input type="file" id="adm-photo-file" accept="image/*" hidden onchange="handleAdminPhotoUpload(event)">
+        </div>
+        <div style="flex:1;min-width:180px;">
+          <div class="field">
+            <label for="adm-barcode" data-i18n="barcode"></label>
+            <input type="text" id="adm-barcode" readonly style="background:var(--surface-2);">
+          </div>
+          <div class="field" style="margin-bottom:0;">
+            <label for="adm-brand" data-i18n="brand"></label>
+            <input type="text" id="adm-brand">
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="adm-name" data-i18n="itemName"></label>
+        <input type="text" id="adm-name" required>
+      </div>
+      <div class="field">
+        <label for="adm-photo-url">Photo URL (Google Drive Share Link)</label>
+        <input type="text" id="adm-photo-url" placeholder="https://drive.google.com/thumbnail?id=...&sz=w600">
+      </div>
+      <div class="grid-2">
+        <div class="field">
+          <label for="adm-racks">Rack Codes (comma-separated)</label>
+          <input type="text" id="adm-racks" placeholder="LS-01-02, CS-03-12">
+        </div>
+        <div class="field">
+          <label for="adm-qty" data-i18n="stockQty"></label>
+          <input type="number" id="adm-qty" min="0">
+        </div>
+      </div>
+      <div class="field">
+        <label for="adm-status" data-i18n="status"></label>
+        <select id="adm-status">
+          <option value="ACTIVE">ACTIVE</option>
+          <option value="NO_STOCK">NO_STOCK (Pending Restock)</option>
+        </select>
+      </div>
+      <div class="field" style="background:var(--purple-soft);border:1.5px solid #c4b5fd;border-radius:10px;padding:10px 12px;">
+        <label style="display:flex;align-items:center;gap:10px;margin:0;cursor:pointer;color:var(--purple);font-size:0.88rem;">
+          <input type="checkbox" id="adm-picknow" style="width:20px;height:20px;min-height:auto;">
+          <span>⚡ PICK NOW (New Stock / Branch Pick Now Tab)</span>
+        </label>
+      </div>
+      <button type="submit" class="btn btn-lg btn-success btn-block" data-i18n="save"></button>
+    </form>
+  </dialog>
+
+  <script src="js/branch.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/api.js"></script>
+  <script>
+    let allItems = [];
+    let allAccounts = [];
+    let allPendingOrders = [];
+    let allLogs = [];
+
+    function updateQuotaMeter() {
+      const q = MBS_API.getQuotaStats();
+      const el = document.getElementById("quota-meter-badge");
+      if (el) el.textContent = `Firestore Session: ${q.reads} Reads | ${q.writes} Writes | ${q.cacheHits} Cache Hits (Saved!)`;
+    }
+
+    async function clearCacheAndReload() {
+      MBS_API.clearItemsCache();
+      showToast("Local cache cleared — syncing fresh...");
+      await loadAdminAll();
+    }
+
+    async function loadAdminAll() {
+      const [items, accounts, orders, logs] = await Promise.all([
+        MBS_API.listItems(),
+        MBS_API.listAccounts(true),
+        MBS_API.listOrders({ status: "PENDING" }),
+        MBS_API.listPickLogs(1000)
+      ]);
+      allItems = items.sort((a, b) => (a.barcode || "").localeCompare(b.barcode || ""));
+      allAccounts = accounts;
+      allPendingOrders = orders;
+      allLogs = logs;
+
+      renderRestockQueue();
+      renderAccountsTable();
+      renderItemsTable();
+      renderDebugAndLogs();
+      updateQuotaMeter();
+    }
+
+    // ---- TAB 1: PENDING RESTOCK & ADMIN PENDING ORDERS EXPORT ----
+    function renderRestockQueue() {
+      document.getElementById("admin-pending-total").textContent = allPendingOrders.length;
+
+      // Populate Admin Pending Brand + Branch filters
+      const brSel = document.getElementById("admin-pending-brand-filter");
+      const prevBrand = brSel.value || "ALL";
+      const brands = MBS_API.collectBrands(allItems, allPendingOrders);
+      brSel.replaceChildren();
+      [
+        ["ALL", t("allBrands")],
+        ["__NONE__", t("noBrandTag")],
+        ...brands.map((b) => [b, b])
+      ].forEach(([val, lbl]) => {
+        const opt = document.createElement("option");
+        opt.value = val;
+        opt.textContent = lbl;
+        brSel.appendChild(opt);
+      });
+      if ([...brSel.options].some((o) => o.value === prevBrand)) brSel.value = prevBrand;
+
+      const bchSel = document.getElementById("admin-pending-branch-filter");
+      const prevBch = bchSel.value || "ALL";
+      const branches = [...new Set(allPendingOrders.map((o) => o.branch_name))].sort();
+      bchSel.replaceChildren();
+      const allBchOpt = document.createElement("option");
+      allBchOpt.value = "ALL";
+      allBchOpt.textContent = "All Branches";
+      bchSel.appendChild(allBchOpt);
+      branches.forEach((b) => {
+        const opt = document.createElement("option");
+        opt.value = b;
+        opt.textContent = b;
+        bchSel.appendChild(opt);
+      });
+      if ([...bchSel.options].some((o) => o.value === prevBch)) bchSel.value = prevBch;
+
+      const noStockItems = allItems.filter((i) => i.item_status === "NO_STOCK");
+      document.getElementById("restock-count").textContent = noStockItems.length;
+      const box = document.getElementById("restock-queue-list");
+      box.replaceChildren();
+
+      if (!noStockItems.length) {
+        const p = document.createElement("p");
+        p.className = "card";
+        p.style.color = "var(--muted)";
+        p.textContent = "All racks stocked — " + t("noData");
+        box.appendChild(p);
+        return;
+      }
+
+      noStockItems.forEach((it) => {
+        const waiting = allPendingOrders.filter((o) => o.barcode === it.barcode);
+        const card = document.createElement("div");
+        card.className = "item-card no-stock";
+
+        const thumb = document.createElement("div");
+        thumb.className = "item-thumb";
+        if (it.photo_url) {
+          const im = document.createElement("img");
+          im.src = it.photo_url;
+          im.alt = it.item_name;
+          thumb.appendChild(im);
+        } else {
+          thumb.textContent = t("noPhoto");
+        }
+
+        const meta = document.createElement("div");
+        meta.className = "item-meta";
+        const nm = document.createElement("div");
+        nm.className = "item-name";
+        nm.textContent = it.item_name || it.barcode;
+
+        const sub = document.createElement("div");
+        sub.className = "item-sub";
+        sub.textContent = `${it.barcode} • Brand: ${it.brand || "-"} • Rack: ${(it.rack_codes || []).join(", ") || "NONE"}`;
+
+        const waitInfo = document.createElement("div");
+        waitInfo.style.cssText = "font-size:0.84rem;color:#92400e;font-weight:700;margin-bottom:8px;";
+        waitInfo.textContent = waiting.length
+          ? `Waiting branches: ${waiting.map((w) => `${w.branch_name} (×${w.qty})`).join(" | ")}`
+          : "No pending branch orders yet.";
+
+        const actions = document.createElement("div");
+        actions.className = "flex-row";
+        const okBtn = document.createElement("button");
+        okBtn.type = "button";
+        okBtn.className = "btn btn-sm btn-success";
+        okBtn.textContent = "✓ " + t("markRestocked");
+        okBtn.onclick = async () => {
+          await MBS_API.setItemStatus(it.barcode, "ACTIVE", "Admin Restock");
+          showToast(`Restocked & Active: ${it.barcode}`);
+          await loadAdminAll();
+        };
+
+        const edBtn = document.createElement("button");
+        edBtn.type = "button";
+        edBtn.className = "btn btn-sm btn-outline";
+        edBtn.textContent = t("edit");
+        edBtn.onclick = () => openAdminItemEditor(it);
+
+        const brBtn = document.createElement("button");
+        brBtn.type = "button";
+        brBtn.className = "btn btn-sm btn-soft-blue";
+        brBtn.textContent = "🏷 " + t("editBrandBtn");
+        brBtn.onclick = async () => {
+          const res = await MBS_API.openBrandEditor({
+            barcode: it.barcode,
+            currentBrand: it.brand || "",
+            itemName: it.item_name || it.barcode,
+            staffName: "Admin IT",
+            knownBrands: MBS_API.collectBrands(allItems, allPendingOrders)
+          });
+          if (res !== null) await loadAdminAll();
+        };
+
+        actions.append(okBtn, edBtn, brBtn);
+        meta.append(nm, sub, waitInfo, actions);
+        card.append(thumb, meta);
+        box.appendChild(card);
+      });
+    }
+
+    function exportAdminPendingCsv() {
+      const itemsMap = Object.fromEntries(allItems.map((i) => [i.barcode, i]));
+      const brandFilter = document.getElementById("admin-pending-brand-filter").value || "ALL";
+      const branchFilter = document.getElementById("admin-pending-branch-filter").value || "ALL";
+      const scoped = branchFilter === "ALL"
+        ? allPendingOrders
+        : allPendingOrders.filter((o) => o.branch_name === branchFilter);
+      MBS_API.exportPendingOrdersCsv({
+        orders: scoped,
+        itemsMap,
+        brandFilter,
+        scopeLabel: branchFilter === "ALL" ? "ADMIN-ALL" : branchFilter
+      });
+    }
+
+    // ---- TAB 2: BRANCH & STAFF ----
+    function renderAccountsTable() {
+      const tbody = document.getElementById("accounts-tbody");
+      tbody.replaceChildren();
+      allAccounts.forEach((a) => {
+        const tr = document.createElement("tr");
+        const th = document.createElement("th");
+        th.textContent = a.branch;
+        tr.appendChild(th);
+
+        [["Staff", a.staff], ["Password", a.password], ["Role", a.role || "BRANCH"]].forEach(([lbl, val]) => {
+          const td = document.createElement("td");
+          td.dataset.label = lbl;
+          td.textContent = val;
+          tr.appendChild(td);
+        });
+
+        const actTd = document.createElement("td");
+        actTd.dataset.label = "Action";
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "btn btn-sm btn-soft-red";
+        del.textContent = t("delete");
+        del.onclick = async () => {
+          if (!confirm(`Delete ${a.branch} / ${a.staff}?`)) return;
+          await MBS_API.deleteAccount(a.branch, a.staff);
+          showToast("Account removed.");
+          await loadAdminAll();
+        };
+        actTd.appendChild(del);
+        tr.appendChild(actTd);
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function saveAccountForm(e) {
+      e.preventDefault();
+      await MBS_API.saveAccount({
+        branch: document.getElementById("acc-branch").value.trim().toUpperCase(),
+        staff: document.getElementById("acc-staff").value.trim(),
+        password: document.getElementById("acc-pw").value.trim(),
+        role: document.getElementById("acc-role").value
+      });
+      document.getElementById("acc-staff").value = "";
+      showToast("Saved account!");
+      await loadAdminAll();
+    }
+
+    function downloadBranchJs() {
+      const cleanList = allAccounts.map((a) => ({
+        branch: a.branch,
+        staff: a.staff,
+        password: a.password,
+        role: a.role || "BRANCH"
+      }));
+      const content =
+        `window.MBS_CONFIG = ${JSON.stringify(window.MBS_CONFIG, null, 2)};\n\n` +
+        `window.MBS_BRANCH_STAFF = ${JSON.stringify(cleanList, null, 2)};\n`;
+      triggerDownload("branch.js", content, "application/javascript");
+    }
+
+    // ---- TAB 3: ITEMS & PHOTO EDITOR + CSV EXPORT ----
+    function renderItemsTable() {
+      document.getElementById("stock-total-count").textContent = allItems.length;
+      const q = (document.getElementById("admin-item-search").value || "").trim().toLowerCase();
+      const tbody = document.getElementById("admin-items-tbody");
+      tbody.replaceChildren();
+
+      const filtered = allItems.filter((it) => {
+        if (!q) return true;
+        return (
+          (it.barcode || "").toLowerCase().includes(q) ||
+          (it.item_name || "").toLowerCase().includes(q) ||
+          (it.brand || "").toLowerCase().includes(q) ||
+          (it.rack_codes || []).join(" ").toLowerCase().includes(q)
+        );
+      });
+
+      filtered.forEach((it) => {
+        const tr = document.createElement("tr");
+        const th = document.createElement("th");
+        th.textContent = it.barcode;
+        tr.appendChild(th);
+
+        const pTd = document.createElement("td");
+        pTd.dataset.label = "Photo";
+        if (it.photo_url) {
+          const im = document.createElement("img");
+          im.src = it.photo_url;
+          im.alt = it.barcode;
+          im.style.cssText = "width:42px;height:42px;object-fit:cover;border-radius:6px;";
+          pTd.appendChild(im);
+        } else {
+          pTd.textContent = "-";
+        }
+        tr.appendChild(pTd);
+
+        const nmTd = document.createElement("td");
+        nmTd.dataset.label = "Item";
+        nmTd.textContent = `${it.item_name || ""} (${it.brand || "-"})`;
+        tr.appendChild(nmTd);
+
+        const rkTd = document.createElement("td");
+        rkTd.dataset.label = "Racks";
+        rkTd.textContent = (it.rack_codes || []).join(", ") || "-";
+        if (MBS_API.isPickNow(it)) {
+          const br = document.createElement("br");
+          const pn = document.createElement("span");
+          pn.className = "badge badge-purple";
+          pn.textContent = "⚡ PICK NOW";
+          rkTd.append(br, pn);
+        }
+        tr.appendChild(rkTd);
+
+        const qTd = document.createElement("td");
+        qTd.dataset.label = "Stock Qty";
+        qTd.textContent = it.stock_quantity ?? "-";
+        tr.appendChild(qTd);
+
+        const sTd = document.createElement("td");
+        sTd.dataset.label = "Status";
+        const sp = document.createElement("span");
+        sp.className = it.item_status === "NO_STOCK" ? "badge badge-red" : "badge badge-green";
+        sp.textContent = it.item_status || "ACTIVE";
+        sTd.appendChild(sp);
+        tr.appendChild(sTd);
+
+        const aTd = document.createElement("td");
+        aTd.dataset.label = "Action";
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn btn-sm btn-soft-blue";
+        btn.textContent = t("edit");
+        btn.onclick = () => openAdminItemEditor(it);
+        aTd.appendChild(btn);
+        tr.appendChild(aTd);
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    function openAdminItemEditor(it) {
+      document.getElementById("adm-barcode").value = it.barcode;
+      document.getElementById("adm-name").value = it.item_name || "";
+      document.getElementById("adm-brand").value = it.brand || "";
+      document.getElementById("adm-photo-url").value = it.photo_url || "";
+      document.getElementById("adm-racks").value = (it.rack_codes || []).filter((r) => MBS_API.normalizeRack(r) !== "PICKNOW").join(", ");
+      document.getElementById("adm-qty").value = it.stock_quantity ?? "";
+      document.getElementById("adm-status").value = it.item_status || "ACTIVE";
+      document.getElementById("adm-picknow").checked = MBS_API.isPickNow(it);
+      syncAdminPhotoPreview(it.photo_url || "");
+      document.getElementById("admin-item-dialog").showModal();
+    }
+
+    function syncAdminPhotoPreview(url) {
+      const im = document.getElementById("adm-photo-img");
+      const ph = document.getElementById("adm-photo-ph");
+      if (url) { im.src = url; im.hidden = false; ph.hidden = true; }
+      else { im.hidden = true; ph.hidden = false; }
+    }
+
+    async function handleAdminPhotoUpload(evt) {
+      const file = evt.target.files && evt.target.files[0];
+      if (!file) return;
+      const code = document.getElementById("adm-barcode").value;
+      try {
+        const res = await MBS_API.uploadPhoto(code, file);
+        if (!res) return; // cancelled crop
+        document.getElementById("adm-photo-url").value = res.url;
+        syncAdminPhotoPreview(res.url);
+        showToast(`📷 1:1 Square (${res.size}×${res.size}, ${res.kb} KB)`);
+      } catch (e) {
+        showToast("Upload failed: " + e.message);
+      } finally {
+        evt.target.value = "";
+      }
+    }
+
+    async function saveAdminItemEdit(e) {
+      e.preventDefault();
+      const racks = document.getElementById("adm-racks").value.split(",").map((s) => s.trim()).filter(Boolean);
+      await MBS_API.saveItem({
+        barcode: document.getElementById("adm-barcode").value,
+        item_name: document.getElementById("adm-name").value.trim(),
+        brand: document.getElementById("adm-brand").value.trim(),
+        photo_url: document.getElementById("adm-photo-url").value.trim(),
+        rack_codes: racks,
+        stock_quantity: document.getElementById("adm-qty").value.trim(),
+        item_status: document.getElementById("adm-status").value,
+        pick_now: document.getElementById("adm-picknow").checked
+      }, "Admin IT");
+      document.getElementById("admin-item-dialog").close();
+      showToast(t("savedSuccess"));
+      await loadAdminAll();
+    }
+
+    function exportWarehouseStockCsv() {
+      const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+      const rows = [["Barcode", "Item Name", "Brand", "Rack Codes", "Pick Now", "Stock Quantity", "Status", "Photo URL", "Updated By"]];
+      allItems.forEach((it) => {
+        rows.push([
+          it.barcode,
+          it.item_name || "",
+          it.brand || "",
+          (it.rack_codes || []).join(" | "),
+          MBS_API.isPickNow(it) ? "YES" : "NO",
+          it.stock_quantity ?? "",
+          it.item_status || "ACTIVE",
+          it.photo_url || "",
+          it.updated_by || ""
+        ]);
+      });
+      const csv = "\uFEFF" + rows.map((r) => r.map(esc).join(",")).join("\n");
+      const today = new Date().toISOString().slice(0, 10);
+      triggerDownload(`MBS_Warehouse_Stock_${today}.csv`, csv, "text/csv;charset=utf-8");
+    }
+
+    function triggerDownload(filename, content, mime) {
+      const blob = new Blob([content], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // ---- TAB 4: DEBUG LAUNCHER & LOGS ----
+    function renderDebugAndLogs() {
+      const branches = [...new Set(allAccounts.map((a) => a.branch))];
+      const sel = document.getElementById("debug-branch-select");
+      sel.replaceChildren();
+      branches.forEach((b) => {
+        const opt = document.createElement("option");
+        opt.value = b;
+        opt.textContent = b;
+        sel.appendChild(opt);
+      });
+
+      // Urgent orders
+      const urgents = allPendingOrders.filter((o) => o.is_urgent);
+      const uBox = document.getElementById("admin-urgent-list");
+      uBox.replaceChildren();
+      if (!urgents.length) {
+        const p = document.createElement("p");
+        p.style.color = "var(--muted)";
+        p.textContent = t("noData");
+        uBox.appendChild(p);
+      } else {
+        urgents.forEach((o) => {
+          const row = document.createElement("div");
+          row.className = "branch-split-row urgent-row";
+          row.textContent = `🔥 ${o.branch_name} | ${o.item_name} (×${o.qty}, +${o.urgent_extra_qty}) | 📞 ${o.customer_contact} | ${o.remark}`;
+          uBox.appendChild(row);
+        });
+      }
+
+      // Logs
+      const tbody = document.getElementById("admin-log-tbody");
+      tbody.replaceChildren();
+      allLogs.forEach((l) => {
+        const tr = document.createElement("tr");
+        const th = document.createElement("th");
+        th.textContent = new Date(l.created_at).toLocaleString();
+        tr.appendChild(th);
+        [["Picker", l.picker_name], ["Item", `${l.item_name} (${l.barcode})`], ["Branch", l.branch_name], ["Qty", l.qty], ["Action", l.action]].forEach(([lbl, val]) => {
+          const td = document.createElement("td");
+          td.dataset.label = lbl;
+          td.textContent = val;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+    }
+
+    function launchBranchDebug() {
+      const b = document.getElementById("debug-branch-select").value;
+      if (!b) return;
+      window.open(`order.html?debugBranch=${encodeURIComponent(b)}`, "_blank");
+    }
+
+    async function resetDemo() {
+      if (!confirm("Reset LocalStorage demo data?")) return;
+      MBS_API.resetDemoData();
+      showToast("Demo data reset!");
+      await loadAdminAll();
+    }
+
+    document.addEventListener("DOMContentLoaded", async () => {
+      await MBS_API.init();
+      await loadAdminAll();
+    });
+  </script>
+</body>
+</html>
