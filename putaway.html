@@ -684,6 +684,9 @@
       document.getElementById("staff-dialog").close();
     }
 
+    document.getElementById("rack-manual-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); applyManualRack(); }
+    });
     document.getElementById("item-barcode-input").addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); lookupTypedBarcode(); }
     });

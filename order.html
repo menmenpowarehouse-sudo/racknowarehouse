@@ -220,6 +220,19 @@
     let branchOrders = [];
     let trolley = []; // [{ barcode, item_name, brand, photo_url, qty, is_custom, remark }]
 
+    function trolleyStorageKey() {
+      return session && session.branch ? `mbs_trolley_${session.branch}` : "mbs_trolley_default";
+    }
+    function saveTrolleyLocal() {
+      try { localStorage.setItem(trolleyStorageKey(), JSON.stringify(trolley)); } catch (_) {}
+    }
+    function loadTrolleyLocal() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(trolleyStorageKey()) || "[]");
+        trolley = Array.isArray(raw) ? raw : [];
+      } catch (_) { trolley = []; }
+    }
+
     async function loadLoginOptions() {
       accounts = (await MBS_API.listAccounts()).filter((a) => a.active !== false);
       const branches = [...new Set(accounts.map((a) => a.branch))];
@@ -280,6 +293,7 @@
       const chip = document.getElementById("branch-user-chip");
       chip.hidden = false;
       chip.textContent = `🏪 ${session.branch} (${session.staff}) ⏻`;
+      loadTrolleyLocal();
       await refreshAllData();
     }
 
@@ -504,6 +518,7 @@
       } else {
         trolley.push(entry);
       }
+      saveTrolleyLocal();
       renderTrolley();
       showToast(`+ ${entry.item_name} (×${entry.qty})`);
     }
@@ -529,6 +544,7 @@
       if (!trolley.length) return;
       if (!confirm(t("clearTrolleyBtn") + "?")) return;
       trolley = [];
+      saveTrolleyLocal();
       renderTrolley();
     }
 
@@ -568,13 +584,13 @@
         qIn.value = line.qty;
         qIn.style.width = "72px";
         qIn.style.minHeight = "36px";
-        qIn.onchange = () => { line.qty = Math.max(1, Number(qIn.value) || 1); updateFloatingTrolleyBar(); };
+        qIn.onchange = () => { line.qty = Math.max(1, Number(qIn.value) || 1); saveTrolleyLocal(); updateFloatingTrolleyBar(); };
 
         const del = document.createElement("button");
         del.type = "button";
         del.className = "btn btn-sm btn-soft-red";
         del.textContent = "✕";
-        del.onclick = () => { trolley.splice(idx, 1); renderTrolley(); };
+        del.onclick = () => { trolley.splice(idx, 1); saveTrolleyLocal(); renderTrolley(); };
 
         right.append(qIn, del);
         row.append(left, right);
@@ -589,6 +605,7 @@
       try {
         await MBS_API.submitOrderLines(session.branch, session.staff, trolley);
         trolley = [];
+        saveTrolleyLocal();
         showToast(t("orderSubmitted"));
         await refreshAllData();
         // Switch automatically to History & Pending tab so user sees submitted items!

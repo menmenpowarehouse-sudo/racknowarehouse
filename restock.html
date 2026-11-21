@@ -14,13 +14,32 @@
     </div>
     <div class="topbar-right">
       <button type="button" class="user-chip" onclick="MBS_API.openPendingRestockExportDialog()">⬇ Restock</button>
-      <button type="button" class="user-chip" onclick="loadAdminAll()">↻</button>
+      <button type="button" id="admin-user-chip" class="user-chip" hidden onclick="logoutAdmin()"></button>
+      <button type="button" class="user-chip" onclick="if (adminSession) loadAdminAll()">↻</button>
       <button type="button" id="lang-toggle-btn" class="lang-btn" onclick="toggleLang()">BM / EN</button>
     </div>
   </header>
   <div id="mode-banner" class="demo-banner"></div>
 
   <main class="container">
+    <!-- ADMIN ROLE LOGIN LOCK (Only role === "ADMIN" allowed!) -->
+    <section id="admin-login-section" class="card" style="max-width:420px;margin:24px auto;">
+      <h1 class="card-title">🔐 Admin Login (ADMIN Only)</h1>
+      <form onsubmit="loginAdmin(event)">
+        <div class="field">
+          <label for="admin-staff-select" data-i18n="staff"></label>
+          <select id="admin-staff-select" required></select>
+        </div>
+        <div class="field">
+          <label for="admin-pw" data-i18n="password"></label>
+          <input type="password" id="admin-pw" required autocomplete="current-password" placeholder="Demo pw: 123">
+        </div>
+        <div id="admin-login-err" class="alert alert-error" hidden></div>
+        <button type="submit" class="btn btn-lg btn-primary btn-block" data-i18n="login"></button>
+      </form>
+    </section>
+
+    <section id="admin-app" hidden>
     <div class="tabs" id="admin-tabs">
       <div role="tablist" class="tablist" focusgroup="tablist nomemory" aria-label="Admin & Restock Sections">
         <button type="button" role="tab" id="tab-restock" aria-selected="true" focusgroupstart>
@@ -185,6 +204,7 @@
         </div>
       </div>
     </div>
+    </section>
   </main>
 
   <!-- DIALOG: Admin Edit Item & Photo -->
@@ -252,10 +272,61 @@
   <script src="js/i18n.js"></script>
   <script src="js/api.js"></script>
   <script>
+    const ADMIN_SESSION_KEY = "mbs_admin_session";
+    let adminSession = null;
+    let adminAccountsPool = [];
     let allItems = [];
     let allAccounts = [];
     let allPendingOrders = [];
     let allLogs = [];
+
+    async function initAdminLogin() {
+      const accs = (await MBS_API.listAccounts()).filter((a) => a.active !== false && a.role === "ADMIN");
+      adminAccountsPool = accs;
+      const sel = document.getElementById("admin-staff-select");
+      sel.replaceChildren();
+      accs.forEach((a) => {
+        const opt = document.createElement("option");
+        opt.value = `${a.branch}__${a.staff}`;
+        opt.textContent = `${a.staff} (${a.branch})`;
+        sel.appendChild(opt);
+      });
+    }
+
+    async function loginAdmin(e) {
+      e.preventDefault();
+      const val = document.getElementById("admin-staff-select").value;
+      const pw = document.getElementById("admin-pw").value;
+      const match = adminAccountsPool.find((a) => `${a.branch}__${a.staff}` === val && String(a.password) === String(pw) && a.role === "ADMIN");
+      const err = document.getElementById("admin-login-err");
+      if (!match) {
+        err.textContent = t("wrongLogin") + " (ADMIN role required)";
+        err.hidden = false;
+        return;
+      }
+      err.hidden = true;
+      adminSession = { branch: match.branch, staff: match.staff, role: "ADMIN" };
+      localStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(adminSession));
+      await enterAdmin();
+    }
+
+    function logoutAdmin() {
+      if (!confirm(`${t("logout")} (${adminSession.staff})?`)) return;
+      localStorage.removeItem(ADMIN_SESSION_KEY);
+      adminSession = null;
+      document.getElementById("admin-app").hidden = true;
+      document.getElementById("admin-user-chip").hidden = true;
+      document.getElementById("admin-login-section").hidden = false;
+    }
+
+    async function enterAdmin() {
+      document.getElementById("admin-login-section").hidden = true;
+      document.getElementById("admin-app").hidden = false;
+      const chip = document.getElementById("admin-user-chip");
+      chip.hidden = false;
+      chip.textContent = `🔐 ${adminSession.staff} ⏻`;
+      await loadAdminAll();
+    }
 
     function updateQuotaMeter() {
       const q = MBS_API.getQuotaStats();
@@ -623,7 +694,7 @@
     }
 
     function exportWarehouseStockCsv() {
-      const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+      const esc = MBS_API.csvEscapeCell;
       const rows = [["Barcode", "Item Name", "Brand", "Rack Codes", "Pick Now", "Stock Quantity", "Status", "Photo URL", "Updated By"]];
       allItems.forEach((it) => {
         rows.push([
@@ -716,7 +787,20 @@
 
     document.addEventListener("DOMContentLoaded", async () => {
       await MBS_API.init();
-      await loadAdminAll();
+      await initAdminLogin();
+      const saved = localStorage.getItem(ADMIN_SESSION_KEY);
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          // Re-verify account is still an active ADMIN
+          const valid = adminAccountsPool.find((a) => a.branch === parsed.branch && a.staff === parsed.staff && a.role === "ADMIN");
+          if (valid) {
+            adminSession = parsed;
+            await enterAdmin();
+            return;
+          }
+        } catch (_) {}
+      }
     });
   </script>
 </body>

@@ -49,6 +49,26 @@
     return raw;
   }
 
+  // Firestore document IDs CANNOT contain '/' (treated as subcollection path separator!)
+  function sanitizeDocId(val) {
+    return String(val || "").trim().replace(/\//g, "-");
+  }
+
+  // CSV Formula Injection guard: neutralize leading =, +, -, @, tab, CR for Excel safety
+  function csvEscapeCell(v) {
+    let s = String(v ?? "");
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+
+  // Local device date YYYY-MM-DD (prevents UTC midnight mismatch in Malaysia UTC+8!)
+  function localDateYYYYMMDD(dt) {
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, "0");
+    const d = String(dt.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
   function isPickNowItem(item) {
     if (!item) return false;
     if (item.pick_now === true) return true;
@@ -530,6 +550,8 @@
     init,
     isLive: () => isLiveFirebase,
     normalizeRack,
+    sanitizeDocId,
+    csvEscapeCell,
     isPickNow: isPickNowItem,
     getQuotaStats: () => ({ ...quotaStats }),
     clearItemsCache: () => {
@@ -541,7 +563,7 @@
     // 1. Lookup single item: Firebase first (fast!), then Google Sheet 1-row TextFinder
     async lookupItem(barcode) {
       await init();
-      const code = String(barcode || "").trim();
+      const code = sanitizeDocId(barcode);
       if (!code) return { found: false, source: "none", item: null };
 
       let fbItem = null;
@@ -616,7 +638,7 @@
     // 2. Save SINGLE item on demand to Firebase (+ optional Sheet master sync)
     async saveItem(itemData, staffName = "") {
       await init();
-      const code = String(itemData.barcode || "").trim();
+      const code = sanitizeDocId(itemData.barcode);
       if (!code) throw new Error("Barcode required");
 
       let cleanRacks = [...new Set((itemData.rack_codes || []).map((r) => normalizeRack(r)).filter(Boolean))];
@@ -675,23 +697,48 @@
     // 3. Interactive 1:1 Square Crop + <=45KB Compress -> Google Drive -> auto Share URL -> write to Sheet
     async uploadPhoto(barcode, file) {
       await init();
+      const safeCode = sanitizeDocId(barcode);
       const cropped = await openSquareCropper(file);
       if (!cropped) return null; // user cancelled crop
 
       const { dataUrl, kb, size } = cropped;
+      let finalUrl = dataUrl;
       if (cfg().GAS_WEBAPP_URL) {
         const base64 = dataUrl.split(",")[1];
         const res = await callGas({
           action: "uploadPhoto",
-          barcode: String(barcode).trim(),
+          barcode: safeCode,
           mimeType: "image/jpeg",
           base64
         });
         if (!res || !res.photo_url) throw new Error((res && res.error) || "Drive upload failed");
-        return { url: res.photo_url, kb, size };
+        finalUrl = res.photo_url;
       }
-      // Demo mode: return compressed 1:1 square data URL directly
-      return { url: dataUrl, kb, size };
+
+      // If this item already exists in Firebase/Demo, sync photo_url right away so Sheet & Firebase never drift
+      if (safeCode) {
+        const now = Date.now();
+        if (isLiveFirebase) {
+          try {
+            const ref = fs.doc(db, "items", safeCode);
+            const snap = await fs.getDoc(ref);
+            trackRead(1);
+            if (snap.exists()) {
+              await fs.setDoc(ref, { photo_url: finalUrl, updated_at: now }, { merge: true });
+              trackWrite(1);
+              upsertLocalItemCache({ ...snap.data(), photo_url: finalUrl, updated_at: now });
+            }
+          } catch (_) {}
+        } else {
+          const d = loadDemo();
+          if (d.items[safeCode]) {
+            d.items[safeCode].photo_url = finalUrl;
+            d.items[safeCode].updated_at = now;
+            saveDemo(d);
+          }
+        }
+      }
+      return { url: finalUrl, kb, size };
     },
 
     // 4. Delta-Cached listItems (ONLY reads items changed since lastSyncTs -> saves ~99% Firestore reads!)
@@ -759,7 +806,7 @@
     // Safely initializes full doc if item was Custom or 200k-Sheet-only (never leaves broken stub!)
     async setItemStatus(barcode, status, staffName, fallbackMeta = {}) {
       await init();
-      const code = String(barcode || "").trim();
+      const code = sanitizeDocId(barcode);
       if (!code) return;
       const now = Date.now();
       if (isLiveFirebase) {
@@ -845,10 +892,12 @@
 
     async saveAccount(acc) {
       await init();
-      const id = `${acc.branch.trim()}__${acc.staff.trim()}`;
+      const cleanBranch = sanitizeDocId(acc.branch);
+      const cleanStaff = sanitizeDocId(acc.staff);
+      const id = `${cleanBranch}__${cleanStaff}`;
       const record = {
-        branch: acc.branch.trim(),
-        staff: acc.staff.trim(),
+        branch: cleanBranch,
+        staff: cleanStaff,
         password: String(acc.password || ""),
         role: acc.role || "BRANCH",
         active: acc.active !== false
@@ -860,10 +909,12 @@
         trackRead(1);
         if (existingSnap.empty) {
           for (const s of (window.MBS_BRANCH_STAFF || [])) {
-            const sId = `${s.branch.trim()}__${s.staff.trim()}`;
+            const sb = sanitizeDocId(s.branch);
+            const ss = sanitizeDocId(s.staff);
+            const sId = `${sb}__${ss}`;
             await fs.setDoc(fs.doc(db, "branches_staff", sId), {
-              branch: s.branch.trim(),
-              staff: s.staff.trim(),
+              branch: sb,
+              staff: ss,
               password: String(s.password || ""),
               role: s.role || "BRANCH",
               active: true
@@ -876,7 +927,7 @@
         localStorage.removeItem(CACHE_ACC_KEY);
       } else {
         const d = loadDemo();
-        const idx = d.branches_staff.findIndex((u) => `${u.branch}__${u.staff}` === id);
+        const idx = d.branches_staff.findIndex((u) => `${sanitizeDocId(u.branch)}__${sanitizeDocId(u.staff)}` === id);
         if (idx >= 0) d.branches_staff[idx] = record;
         else d.branches_staff.push(record);
         saveDemo(d);
@@ -886,7 +937,7 @@
 
     async deleteAccount(branch, staff) {
       await init();
-      const id = `${branch}__${staff}`;
+      const id = `${sanitizeDocId(branch)}__${sanitizeDocId(staff)}`;
       if (isLiveFirebase) {
         await fs.deleteDoc(fs.doc(db, "branches_staff", id));
         trackWrite(1);
@@ -949,7 +1000,7 @@
       const existingPending = await this.listOrders({ status: "PENDING", branch_name: branchName });
 
       for (const line of cartItems) {
-        const code = String(line.barcode || "").trim();
+        const code = sanitizeDocId(line.barcode);
         const qty = Number(line.qty) || 1;
         // Rule 3B: Always merge into existing PENDING order for same (branch, barcode),
         // even if that existing order is Urgent (1 branch x 1 barcode = max 1 PENDING row!)
@@ -1205,7 +1256,7 @@
       };
       if (isLiveFirebase) {
         const dt = new Date(now);
-        const day = dt.toISOString().slice(0, 10);
+        const day = localDateYYYYMMDD(dt); // Local Malaysia date (fixes 00:00-07:59 UTC mismatch!)
         const half = dt.getHours() < 12 ? "AM" : "PM";
         const bucketId = `${day}_${half}`;
         await fs.setDoc(fs.doc(db, "pick_log_buckets", bucketId), {
@@ -1255,7 +1306,7 @@
     // Safe for Custom / Sheet-only items (only updates `items` if it exists or includes full item_name!)
     async updateItemBrand(barcode, newBrand, staffName = "", fallbackItemName = "") {
       await init();
-      const code = String(barcode || "").trim();
+      const code = sanitizeDocId(barcode);
       const brand = String(newBrand || "").trim().toUpperCase();
       if (!code) throw new Error("Barcode required");
       const now = Date.now();
@@ -1454,7 +1505,7 @@
         return 0;
       }
 
-      const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+      const esc = csvEscapeCell;
       const rows = [[
         "Order ID", "Branch", "Staff", "Barcode", "Item Name", "Brand",
         "Rack Codes", "Pick Now", "Qty", "Item Status", "Urgent",
@@ -1723,7 +1774,7 @@
         const rows = this.buildPendingRestockRows(allItems, allPendingOrders, brandSel.value, branchSel.value);
         if (!rows.length) return showToast(t("noData"));
 
-        const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+        const esc = csvEscapeCell;
         const csvRows = [[
           "Branch", "Brand", "Barcode", "Item Name", "Rack Codes",
           "Qty Needed", "System Stock Qty", "Urgent", "Customer Contact", "Remark", "Flagged By"
